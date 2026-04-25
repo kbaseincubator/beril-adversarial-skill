@@ -98,10 +98,19 @@ brief summary to the user:
 - Churn from prior reviews if applicable: how many issues addressed
   vs. still open
 - Pointer to the output file
-- **The run-cost summary line** that the parser printed to the bash
-  output (e.g., `Adversarial review: 06:58  ·  input=92,345 output=6,789  ·  ~$0.163`).
-  This is in the bash command's captured output near the end. Quote
-  it verbatim so the user sees what the run cost.
+- **Cumulative run cost** from the review file's `## Run Metadata`
+  section at the end (elapsed, tokens, $cost, pipeline labels).
+  This is the canonical record. Optionally also quote the per-call
+  summary lines that appeared in the bash output (e.g.,
+  `Adversarial review: 06:58 · input=... output=... ~$0.163`) for
+  per-stage transparency.
+- **Compliance critic outcome** — surface this verbatim from the
+  bash output. One of:
+    - `Compliance critic: PASS` (review compliant on first try)
+    - `Compliance critic: N violation(s) — running fix pass...`
+      followed by `Compliance critic (post-fix): PASS` (fix worked)
+    - `Compliance critic (post-fix): N violation(s) remain.` (fix
+      didn't fully land; audit log preserved at `<output>.audit2.md`)
 
 ## Step 6 — Guidance
 

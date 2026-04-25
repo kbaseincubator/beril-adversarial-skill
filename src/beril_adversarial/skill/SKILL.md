@@ -90,9 +90,12 @@ the right system prompt — same pattern as BERIL's `tools/review.sh`.
   `papers/draft{N}-review.md` co-located with the draft.
 
 **Tools granted to the reviewer subprocess:**
-`Read, Write, Bash, Grep, Glob, WebSearch, Agent`. Richer than
-`/berdl-review` so the reviewer can grep notebooks, verify biological
-claims via web search, and delegate sub-analysis when needed.
+`Read, Write, Bash, Grep, Glob, WebSearch, Agent, ToolSearch`. Richer
+than `/berdl-review`. The reviewer can grep notebooks, verify
+biological claims via web search, run small Python via Bash for Tier
+1 calculations, delegate sub-analysis to subagents (e.g., the
+literature-scan subagent), and dynamically load BERIL's MCP tools
+(PubMed, paper-search, paperblast) via ToolSearch.
 
 ### `/beril-adversarial-configure` — verify environment
 
@@ -121,14 +124,27 @@ Run the shipped shell script:
 
 The script:
 
-- Auto-numbers the output file (race-safe via placeholder).
+- Auto-numbers the output file race-safely via noclobber-atomic claim.
 - Loads the system prompt from `prompts/adversarial_<type>.v1.md`.
 - Invokes `claude -p` (or `codex exec`) with the system prompt and a
   short review prompt that points at the project artifacts.
+- Pipes claude's stream-json output through `tools/stream_progress.py`
+  for programmatic Write-tool verification and per-call cost summary.
+  Auto-retries on silent failure (Write not invoked) up to 3 attempts.
 - For `--reviewer claude,codex`: runs both in parallel as
   `*_claude.md` and `*_codex.md` intermediate files, then a third
   `claude -p` with `prompts/fusion.v1.md` produces the unified
   numbered file with dated provenance preserved.
+- After the main review writes successfully (and unless `--no-critic`),
+  invokes the compliance critic via `prompts/compliance_critic.v1.md`.
+  The critic audits format/discipline violations (no Sources sections,
+  strict 9-field citation format, no vague non-citations, no vague
+  missing-citation suggestions). On violations: runs a targeted fix
+  pass that re-invokes the original reviewer with the violation list
+  to fix in place. Re-runs the critic to confirm the fix landed.
+- Aggregates per-call metadata (main + critic + fix + re-critic) and
+  appends one cumulative `## Run Metadata` section to the review file:
+  total elapsed, tokens, cost, pipeline labels.
 
 Run from `BERIL_ROOT` (the directory containing `projects/` and
 `.claude/`). The script auto-resolves BERIL_ROOT from its own install
