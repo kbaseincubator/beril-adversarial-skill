@@ -1,0 +1,170 @@
+####################################################################
+# beril-adversarial-skill — pyproject.toml
+#
+# Status: DRAFT 2026-04-25. Awaiting Adam review before first build.
+# Mirrors beril-atlas-skill packaging.
+#
+# Notable: ZERO runtime dependencies. The Python layer here is
+# install + configure only. The review itself is shelled out to the
+# user's `claude` / `codex` CLIs by tools/adversarial_review.sh,
+# carried as package_data and copied into the BERIL skill dir.
+####################################################################
+
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+# ----------------------------------------------------------------------
+# Project metadata
+# ----------------------------------------------------------------------
+
+[project]
+name = "beril-adversarial-skill"
+version = "0.1.0"
+description = "BERIL Adversarial Reviewer — harsher review skill with multi-model fusion and provenance-tracked consolidation, distributed as a Claude Code skill."
+readme = "README.md"
+requires-python = ">=3.10"
+
+authors = [
+    {name = "Arkin Laboratory", email = "aparkin@lbl.gov"},
+]
+
+license = {text = "MIT"}
+
+keywords = [
+    "bioinformatics",
+    "claude-code",
+    "beril",
+    "kbase",
+    "research-observatory",
+    "review",
+    "adversarial",
+]
+
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    # Prevents accidental `twine upload` while repo is private.
+    # Remove when going public on PyPI.
+    "Private :: Do Not Upload",
+]
+
+# ----------------------------------------------------------------------
+# Runtime dependencies
+# ----------------------------------------------------------------------
+#
+# None. discovery.py, install_skill.py, and configure.py use stdlib only
+# (argparse, pathlib, shutil, subprocess, importlib.resources, os, re).
+# The review itself is run by the shipped shell script invoking the
+# user's claude/codex CLIs — those carry their own provider config and
+# dependencies; we don't reach into them.
+
+dependencies = []
+
+# ----------------------------------------------------------------------
+# Optional dependencies (extras)
+# ----------------------------------------------------------------------
+
+[project.optional-dependencies]
+
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.4.0",
+    "build>=1.0.0",
+]
+
+# ----------------------------------------------------------------------
+# Console scripts
+# ----------------------------------------------------------------------
+
+[project.scripts]
+beril-adversarial = "beril_adversarial.cli:main"
+
+# Subcommands:
+#   beril-adversarial install-skill <BERIL_ROOT>
+#   beril-adversarial configure
+#
+# The review and consolidation paths are NOT Python subcommands —
+# they're handled by the shipped shell script
+# tools/adversarial_review.sh (which the slash command invokes
+# directly). Same pattern as BERIL's tools/review.sh.
+
+# ----------------------------------------------------------------------
+# URLs
+# ----------------------------------------------------------------------
+
+[project.urls]
+Homepage = "https://github.com/ArkinLaboratory/beril-adversarial-skill"
+Issues = "https://github.com/ArkinLaboratory/beril-adversarial-skill/issues"
+Repository = "https://github.com/ArkinLaboratory/beril-adversarial-skill.git"
+
+# ----------------------------------------------------------------------
+# Build configuration
+# ----------------------------------------------------------------------
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/beril_adversarial"]
+
+# The shipped skill directory (SKILL.md, prompts, references, tools)
+# lives inside the package at src/beril_adversarial/skill/ and ships
+# as package data. Accessed at runtime via importlib.resources.
+# Hatchling auto-includes non-.py files in the package; the shell
+# script's executable bit is preserved through wheel metadata.
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/beril_adversarial",
+    "tests",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+exclude = [
+    "**/__pycache__",
+    "**/*.pyc",
+    "**/.DS_Store",
+    # State directories never ship.
+    "src/beril_adversarial/skill/state",
+]
+
+# ----------------------------------------------------------------------
+# Tool configurations
+# ----------------------------------------------------------------------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: marks tests that hit live LLM CLIs (deselect with '-m \"not integration\"')",
+    "slow: marks tests that take >5s",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long — handled by formatter
+]

@@ -1,0 +1,1 @@
+"""beril-adversarial CLI subcommands."""
