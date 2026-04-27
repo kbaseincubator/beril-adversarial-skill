@@ -592,6 +592,18 @@ actually invoked in this turn."
     "$review_file" "compliance fix pass" "$metadata_path"
 }
 
+# Compute the forensic-artifacts directory for a review file.
+# Usage: debug_dir_for <review_file_path>
+#   echoes <project>/.adversarial-debug/<review-basename-without-ext>/
+# Does not create the directory; caller decides.
+debug_dir_for() {
+  local review_file="$1"
+  local dir base
+  dir="$(dirname "$review_file")"
+  base="$(basename "$review_file" .md)"
+  echo "$dir/.adversarial-debug/$base"
+}
+
 # Finalize a review: run compliance critic + fix pass if violations,
 # re-critic to confirm, then aggregate per-call metadata into a Run Metadata
 # section appended to the review file.
@@ -617,9 +629,18 @@ finalize_review() {
   local sys_prompt_file="$2"
   local model="$3"
 
+  # Forensic artifacts (audit logs, fix attempts, pre-fix backup) live in
+  # a debug subdirectory so they don't litter the project root. We wipe
+  # this subdir at start of each finalize_review call: only the most
+  # recent run's forensics ever persist (auto-prune).
+  local debug_dir
+  debug_dir="$(debug_dir_for "$output_file")"
+  rm -rf "$debug_dir"
+  mkdir -p "$debug_dir"
+
   # Compliance critic + fix pass (skipped if NO_CRITIC=1 or codex-only path)
   if [[ "$NO_CRITIC" != "1" ]]; then
-    local audit_file="${output_file}.audit.md"
+    local audit_file="$debug_dir/audit.md"
     local meta_critic="${output_file}.metadata.critic.json"
     if invoke_critic "$output_file" "$model" "$audit_file" "$meta_critic"; then
       META_FILES+=( "$meta_critic" )
@@ -638,8 +659,8 @@ finalize_review() {
         # claim_file step truncates output_file to a placeholder before the
         # fix-pass model runs; if the model produces invalid/corrupted output
         # (or the helper fails entirely after retries), we lose the original.
-        # The .pre-fix.bak lets us restore on any failure mode.
-        local fix_backup="${output_file}.pre-fix.bak"
+        # The pre-fix.bak (in debug_dir) lets us restore on any failure mode.
+        local fix_backup="$debug_dir/pre-fix.bak"
         local original_lines
         cp "$output_file" "$fix_backup"
         original_lines=$(wc -l < "$fix_backup")
@@ -673,7 +694,7 @@ finalize_review() {
           META_FILES+=( "$meta_fix" )
           CALL_LABELS+=( "fix" )
 
-          local audit_file2="${output_file}.audit2.md"
+          local audit_file2="$debug_dir/audit2.md"
           local meta_recritic="${output_file}.metadata.recritic.json"
           if invoke_critic "$output_file" "$model" "$audit_file2" "$meta_recritic"; then
             META_FILES+=( "$meta_recritic" )
@@ -687,11 +708,18 @@ finalize_review() {
               echo "Compliance critic (post-fix): ${r_count} violation(s) remain. Audit at $audit_file2" >&2
               rm -f "$audit_file"
             fi
+          else
+            # Re-critic invocation hard-failed (subprocess error, not just
+            # a violations result). Don't leak the audit files — we have
+            # no signal on whether the fix landed cleanly, but the user's
+            # review is at least intact.
+            echo "Warning: re-critic invocation failed; cannot verify fix landed" >&2
+            rm -f "$audit_file" "$audit_file2"
           fi
         else
           # Fix pass produced invalid output. Preserve the corrupt attempt
           # for inspection, then restore the original review from backup.
-          local fix_attempt="${output_file}.fix-attempt.md"
+          local fix_attempt="$debug_dir/fix-attempt.md"
           if [[ -f "$output_file" ]]; then
             mv "$output_file" "$fix_attempt"
           fi
@@ -712,6 +740,14 @@ finalize_review() {
       rm -f "$audit_file"
     fi
   fi
+
+  # If the debug dir is empty (clean run, no forensics preserved), remove
+  # it entirely so the project root has zero adversarial-skill residue.
+  # Also try to remove the parent .adversarial-debug/ if it's now empty
+  # (e.g., this was the only review in the project, or all peer reviews
+  # are also clean).
+  rmdir "$debug_dir" 2>/dev/null || true
+  rmdir "$(dirname "$debug_dir")" 2>/dev/null || true
 
   # Aggregate per-call metadata into one cumulative Run Metadata section
   if [[ ${#META_FILES[@]} -gt 0 && -f "$SKILL_DIR/tools/aggregate_metadata.py" ]]; then
