@@ -91,9 +91,16 @@ Default read set for a project review:
 - `README.md` — question, status, authors, reproduction
 - `RESEARCH_PLAN.md` — hypothesis, approach
 - `REPORT.md` — findings, interpretation
-- All `REVIEW_*.md` and `ADVERSARIAL_REVIEW_*.md` (prior reviews). Note
-  what was already flagged. Do not duplicate their points unless they
-  were ignored; focus on what was missed.
+- Prior-round adversarial baseline:
+  - If `ADVERSARIAL_REVIEW.md` (consolidated) exists, treat it as the
+    LIVE baseline. Numbered files (`ADVERSARIAL_REVIEW_*.md`) are
+    historical audit trail and you do not need to walk them.
+  - Else use the highest-numbered `ADVERSARIAL_REVIEW_*.md` as the
+    immediate prior; the rest of the chain is context.
+  - `REVIEW_*.md` files are from BERIL's lighter `/berdl-review`;
+    note their findings briefly but they are not the adversarial
+    baseline.
+  - See "Additivity across rounds" below for how to USE the baseline.
 - `notebooks/*.ipynb` — cell source and numeric outputs. Skip
   base64-encoded image data.
 - `figures/` — note what exists and is referenced in REPORT.
@@ -105,6 +112,75 @@ Default read set for a project review:
 - `state/learned-patterns.md` in this skill's install dir (if present) —
   meta-patterns you have flagged in prior reviews. See "Learned-patterns
   protocol" below.
+
+## Additivity across rounds
+
+Adversarial review is **iterative and additive**. When a prior baseline
+exists (any `ADVERSARIAL_REVIEW.md` or `ADVERSARIAL_REVIEW_*.md`), this
+review must NOT re-litigate already-flagged issues. Each round produces
+an additive delta: the disposition of existing issues plus genuinely
+new findings.
+
+**Strict rules:**
+
+1. **Read the baseline first.** Extract the full set of issues already
+   raised — by ID, title, severity, and location. This is your prior
+   ledger. Maintain it as you read the project artifacts so you don't
+   accidentally reinvent something already flagged.
+
+2. **Do not restate prior issues with reworded text.** If C2 from the
+   prior baseline is "Pooled analyses ignore organism-level
+   heterogeneity," do NOT produce a new C-level "Statistical analyses
+   conflate per-organism and global effects" in this round. Same issue,
+   different words. That's a violation.
+
+3. **Carryover section comes first.** Lead the body of the review with
+   `## Carryover from Prior Rounds`, listing every prior issue with a
+   one-line disposition: `resolved` / `partially addressed` / `still
+   open` / `obsolete` (no longer applies because the project pivoted /
+   data changed / etc.). Cite the source round/file inline.
+
+4. **New issues are strictly net-new.** Reserve the per-section
+   bins (Statistical Rigor, Hypothesis Vetting, Biological Claims,
+   Data Support, Literature, etc.) for issues that did NOT appear in
+   the prior baseline. Severity counts in the frontmatter
+   (`critical`, `important`, `suggested`) reflect ONLY these new
+   issues — NOT the cumulative count.
+
+5. **Frontmatter `round_number`.** Set `round_number: N` where N is
+   1-indexed: 1 if this is the first review, 2 if there is exactly
+   one prior numbered review, etc. After consolidation, keep counting
+   from where the previous chain left off (consolidation does not
+   reset the counter).
+
+6. **Frontmatter `prior_round_disposition`.** Add a count of carryover
+   dispositions: `{resolved: X, partially_addressed: Y, still_open: Z,
+   obsolete: W}`. Counts include every issue from prior rounds.
+
+7. **When in doubt about whether something is "new" vs "reworded
+   prior":** if the underlying mechanism is the same (same statistical
+   confound, same logical gap, same missing evidence), it's a prior
+   issue with `still open` disposition — even if you'd phrase it
+   differently. Add nuance via a note inside the carryover entry; do
+   NOT promote it to a new issue.
+
+**What additivity does NOT mean:** if a prior issue was raised at
+Important severity and on this round you have stronger evidence to
+upgrade it to Critical, that's allowed — note it in the carryover as
+`severity_upgraded` and explain why. Same for downgrades. Severity
+revision is not the same as re-raising.
+
+**First-round behavior.** If no prior baseline exists, the Carryover
+section is empty (write `(no prior rounds)`). All issues are new by
+definition. Set `round_number: 1`.
+
+**After consolidation.** When the user runs
+`/beril-adversarial --consolidate`, the canonical
+`ADVERSARIAL_REVIEW.md` becomes the new baseline. The numbered files
+remain on disk as audit trail but you do not need to re-read them —
+the consolidation already merged their content into the canonical
+file, with disposition tracking. Treat the canonical file as the
+single source of truth for what's been raised.
 
 ## Focus areas
 
@@ -840,24 +916,71 @@ type: project
 date: YYYY-MM-DD
 project: {project_id}
 review_number: {N}
+round_number: {N}
 prompt_version: adversarial_project.v1
+# severity_counts: NEW issues raised THIS ROUND only — do not include
+# carryover from prior rounds. Severity revisions on prior issues
+# (upgrades or downgrades) belong in the carryover section, not in
+# these counts.
 severity_counts:
   critical: {N}
   important: {N}
   suggested: {N}
+# prior_round_disposition: how every prior-round issue stands NOW.
+# Counts must sum to the total prior-issue count across all baselines
+# considered. Set all to 0 on round 1 (no prior baseline).
+prior_round_disposition:
+  resolved: {N}
+  partially_addressed: {N}
+  still_open: {N}
+  obsolete: {N}
 biological_claims_checked: {N}
 biological_claims_flagged: {N}
+# Which baseline file(s) you used. Prefer ADVERSARIAL_REVIEW.md if
+# present (consolidated baseline). Else list numbered files used.
 prior_reviews_considered:
-  - REVIEW_1.md
-  - ADVERSARIAL_REVIEW_1.md
+  - ADVERSARIAL_REVIEW.md  # if consolidated baseline exists
+  # OR:
+  # - ADVERSARIAL_REVIEW_3.md
+  # - ADVERSARIAL_REVIEW_2.md
 ---
 
-# Adversarial Review — {Project Title}
+# Adversarial Review — {Project Title} (round {N})
 
 ## Summary
 
-{1–2 paragraphs. Overall verdict; most important findings. Acknowledge
-genuine strengths.}
+{1–2 paragraphs. Overall verdict for THIS round. State explicitly:
+"This is round N of an iterative review. {X} prior issues have been
+resolved, {Y} are partially addressed, {Z} remain open. This round
+adds {N_new} new issue(s)." Acknowledge genuine strengths and
+genuine progress since prior rounds.}
+
+## Carryover from Prior Rounds
+
+{If this is round 1: write `(no prior rounds)` and skip this section's
+remaining content.}
+
+{Otherwise: list every issue from the prior baseline (preferably
+`ADVERSARIAL_REVIEW.md` if it exists; else the chain of numbered
+files). One bullet per issue, format below. Do NOT restate the
+original critique — just disposition.}
+
+```
+- **{ID}: {short title}** — origin: {ADVERSARIAL_REVIEW.md§ID | ADVERSARIAL_REVIEW_K.md§ID}
+  - Disposition: resolved | partially_addressed | still_open | obsolete | severity_upgraded | severity_downgraded
+  - Evidence: {one short sentence pointing at code/notebook/file/section that supports this disposition}
+  - Note (optional): {if partially addressed or severity changed, what specifically remains or shifted}
+```
+
+{Group bullets under three sub-headers — `### Resolved`,
+`### Partially Addressed`, `### Still Open`, `### Obsolete`. Skip any
+sub-header with no entries. Severity-revised issues go under the
+relevant disposition (still_open if upgraded, partially_addressed if
+the issue is shrinking, etc.) with the severity-revision noted.}
+
+{The `## Statistical Rigor` / `## Hypothesis Vetting` / etc. sections
+below contain ONLY new issues raised this round. Do not duplicate
+carryover entries there.}
 
 ## Overall Scientific Critique
 
@@ -926,10 +1049,6 @@ requires-verification; numeric mismatches if any.}
 ## Literature and External Resources
 {Citation gaps; tools or datasets the project could leverage.}
 
-## Issues from Prior Reviews
-{What's still open from earlier REVIEW_*.md / ADVERSARIAL_REVIEW_*.md,
-what's resolved, what's obsolete.}
-
 ## Review Metadata
 - **Reviewer**: BERIL Adversarial Review ({Tool}, {model-id})
 - **Date**: {YYYY-MM-DD}
@@ -948,10 +1067,18 @@ what's resolved, what's obsolete.}
 - Cite specific files, cell numbers, or line numbers for every issue —
   no vague "the methods section".
 - Do not fabricate issues. Report only what you can point at.
-- Do not repeat prior-review points unless they were ignored. Credit
-  the prior review if you're reinforcing.
+- **Additivity is non-negotiable.** Do not re-raise a prior-baseline
+  issue under a new title or new wording. If the underlying mechanism
+  is the same as a prior issue, it goes in Carryover with `still_open`
+  disposition — never in the new-issues sections. The compliance
+  critic will not catch this; the discipline is on you.
+- **Severity counts are net-new only.** `severity_counts` in the
+  frontmatter counts new issues raised this round. Carryover
+  dispositions go under `prior_round_disposition` separately.
 - Useful over exhaustive. A 30-issue review is likely padded; a
   5–12-issue review with precise cites and fixes is more valuable.
+  Round-N reviews (N>1) are typically SHORTER than round 1 because
+  most issues are already in the baseline.
 - **Self-skepticism pass before submitting.** Before producing the
   final review, re-read it and ask: did I let any claim pass on
   plausibility alone? Adversarial means flagging

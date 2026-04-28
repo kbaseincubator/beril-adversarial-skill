@@ -12,9 +12,12 @@ flagging of inferential leaps.
 
 ## Status
 
-v0.2.0 — adds the programmatic citation verification gate (Crossref +
-NCBI PubMed). System prompts remain at `.v1.md`; no breaking changes
-to slash commands or output paths.
+v0.3.0 — adds additivity discipline for multi-round reviews.
+Carryover-from-Prior-Rounds section comes first; severity counts
+reflect new-this-round only; canonical consolidated file is the live
+baseline for the next round. v0.2.0 added the programmatic citation
+verification gate (Crossref + NCBI PubMed). System prompts remain at
+`.v1.md`; no breaking changes to slash commands or output paths.
 
 ## Install
 
@@ -99,7 +102,52 @@ for a standard project review.
   zero LLM token cost (just HTTP calls to free registries).
 - `--consolidate` — synthesize all numbered reviews into a canonical
   file with revision-history provenance; numbered files are preserved
-  as audit trail.
+  as audit trail. The canonical file becomes the live baseline for
+  the next adversarial run (see "Additive multi-round reviews"
+  below).
+
+### Additive multi-round reviews
+
+Adversarial review is iterative. Each round produces an **additive
+delta** against the prior baseline rather than a fresh full review.
+The reviewer:
+
+- Reads the prior baseline (`ADVERSARIAL_REVIEW.md` if it exists,
+  else the highest-numbered `ADVERSARIAL_REVIEW_N.md`)
+- Leads the new review's body with a `## Carryover from Prior Rounds`
+  section: every prior issue with a one-line disposition (`resolved`,
+  `partially_addressed`, `still_open`, `obsolete`)
+- Reserves the per-section issue lists for genuinely NEW findings
+- `severity_counts` in the YAML frontmatter reflect new-this-round
+  only; carryover dispositions go under `prior_round_disposition`
+
+Typical lifecycle:
+
+```
+round 1: /beril-adversarial my_project
+         → ADVERSARIAL_REVIEW_1.md (8 critical, 12 important)
+
+round 2: (after addressing some issues)
+         /beril-adversarial my_project
+         → ADVERSARIAL_REVIEW_2.md (carryover: 5 still_open,
+           3 resolved, 4 partial; 2 new important issues)
+
+round 3: /beril-adversarial my_project
+         → ADVERSARIAL_REVIEW_3.md (similar structure)
+
+         /beril-adversarial my_project --consolidate
+         → ADVERSARIAL_REVIEW.md (canonical baseline,
+           current-state ledger of all 28 issues raised across
+           the chain, with disposition tracking)
+
+round 4: /beril-adversarial my_project
+         → ADVERSARIAL_REVIEW_4.md (reads ADVERSARIAL_REVIEW.md
+           as baseline; the numbered files are no longer needed
+           by the model, but persist on disk as audit trail)
+```
+
+The `round_number` field in frontmatter persists across consolidation
+— consolidation does not reset the counter.
 
 ## How it fits into the BERIL workflow
 

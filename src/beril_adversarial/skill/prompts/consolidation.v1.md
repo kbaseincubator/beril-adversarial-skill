@@ -204,3 +204,27 @@ open; N disposition unclear}
   wording for what is clearly the same problem, they are one issue.
 - **Severity: use the highest severity from any round**, unless later
   rounds explicitly downgraded with justification.
+
+## This consolidation IS the next-round baseline
+
+The canonical file you produce becomes the live baseline for the next
+adversarial review run. The reviewer of round N+1 will read this file
+and:
+- Treat every entry under "Persistent Open Issues" as `still_open`
+  carryover (re-check if still applicable; downgrade or close as
+  warranted).
+- Treat every entry under "Resolved Issues" as `resolved` carryover
+  (do not re-raise unless current artifacts show the issue has
+  resurfaced).
+- Treat every entry under "Disposition Unclear" as `still_open` with
+  a note to confirm.
+
+Format implications:
+- Each issue under Persistent Open / Resolved / Disposition Unclear
+  must have a stable, copyable identifier (e.g., the `C1:`, `I3:`,
+  `S2:` prefix used in the section). The next-round reviewer uses
+  that identifier to refer back to it.
+- Cite the originating round inline so the next reviewer can trace
+  to the source if needed.
+- After consolidation, numbered files are preserved as audit trail
+  but the next-round reviewer should NOT need to re-walk them.

@@ -128,9 +128,27 @@ strict format AND verified.
 - Whether all claims got bio-claim verification
 - Whether the literature scan was thorough enough
 - Anything about hypothesis vetting structure or content
+- Whether the review is appropriately additive or re-raises prior
+  issues — that's a different audit, not yours
 
 If you find yourself wanting to comment on substance, STOP. That's
 not your job. You only audit compliance with rules 1–4.
+
+### Carryover sections are NOT subject to citation rules
+
+Adversarial reviews include a `## Carryover from Prior Rounds`
+section listing prior-round issues with one-line dispositions like:
+
+```
+- **C2: Pooled analyses ignore organism heterogeneity** —
+  origin: ADVERSARIAL_REVIEW_2.md§C2 —
+  Disposition: still_open —
+  Evidence: notebook 01_burden_anatomy still uses pooled Fisher tests
+```
+
+These cross-references to internal review files are NOT literature
+citations and NOT subject to the strict 9-field citation rule (Rule 2)
+or the vague-non-citation rule (Rule 3). Do not flag them.
 
 ## Important
 

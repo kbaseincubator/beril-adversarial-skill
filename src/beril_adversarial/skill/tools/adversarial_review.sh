@@ -1111,21 +1111,32 @@ case "$REVIEW_TYPE" in
     TARGET_DESC="the research plan at projects/${PROJECT_ID}/"
     READ_HINT="Read RESEARCH_PLAN.md, README.md, references.md. Also scan \
 docs/pitfalls.md, docs/schemas/, and other projects/*/README.md for prior \
-art."
+art. Prior-baseline lookup priority for additivity: \
+ADVERSARIAL_PLAN_REVIEW.md (consolidated baseline) if present, else the \
+highest-numbered ADVERSARIAL_PLAN_REVIEW_*.md. PLAN_REVIEW_*.md are from \
+/berdl-review and are secondary context, not the adversarial baseline."
     ;;
   project)
     TARGET_DESC="the project at projects/${PROJECT_ID}/"
     READ_HINT="Read all canonical artifacts (README, RESEARCH_PLAN, REPORT, \
-existing REVIEW_*.md and ADVERSARIAL_REVIEW_*.md, notebooks, figures, \
-references.md, data/). Also docs/pitfalls.md and \
-.claude/skills/beril-adversarial/state/learned-patterns.md if present."
+notebooks, figures, references.md, data/). Also docs/pitfalls.md and \
+.claude/skills/beril-adversarial/state/learned-patterns.md if present. \
+Prior-baseline lookup priority for additivity: ADVERSARIAL_REVIEW.md \
+(consolidated baseline) if present — treat as the LIVE baseline; the \
+numbered ADVERSARIAL_REVIEW_*.md files become audit trail and you do \
+NOT need to re-walk them. Else use the highest-numbered \
+ADVERSARIAL_REVIEW_*.md as the immediate prior. REVIEW_*.md from \
+/berdl-review are secondary context, not the adversarial baseline."
     ;;
   paper)
     TARGET_DESC="the paper draft at ${PAPER_DRAFT#$BERIL_ROOT/}"
     READ_HINT="Read the draft, papers/THROUGHLINE.md, papers/bibliography.bib, \
 papers/citation-map.md, and cross-check against projects/${PROJECT_ID}/REPORT.md \
 plus figures/. Also .claude/skills/beril-adversarial/state/learned-patterns.md \
-if present. Prior paper reviews in papers/draft*-review*.md are context."
+if present. Prior-baseline lookup priority for additivity: \
+papers/FINAL_REVIEW.md (consolidated) if present, else highest-versioned \
+review of the current draft (e.g., draft{N}-review_v{K}.md). Reviews of \
+earlier drafts (draft{N-1}-review.md) are historical context."
     ;;
 esac
 

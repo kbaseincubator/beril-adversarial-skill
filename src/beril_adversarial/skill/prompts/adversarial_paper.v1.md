@@ -66,10 +66,46 @@ verifying the pattern applies to the paper's specific analysis.
   honest. Cross-check.
 - `projects/{id}/figures/` — available figures. Check which the paper
   uses; check claims about figure content.
-- Prior paper reviews: `papers/draft{N-1}-review.md` etc. Note what
-  was flagged; check whether the revision addressed it.
+- Prior-baseline lookup priority for paper review:
+  - If `papers/FINAL_REVIEW.md` exists, it is the LIVE baseline.
+  - Else use the highest-versioned review of the CURRENT draft
+    (`draft{N}-review.md`, `draft{N}-review_v2.md`, ...).
+  - Reviews of EARLIER drafts (`draft{N-1}-review.md`, ...) are
+    historical context, but those issues should be re-checked in the
+    current draft.
 - `state/learned-patterns.md` (if present) — meta-patterns from prior
   paper reviews.
+
+## Additivity across rounds
+
+Paper review is iterative and additive. Each round produces a delta
+against the prior baseline — not a fresh full review. The same
+underlying mechanism does not get re-raised under a new title.
+
+1. **Read the baseline first.** Extract every prior issue (ID, title,
+   severity, location). Check whether the current draft addresses it.
+
+2. **Carryover comes first.** Lead the body with
+   `## Carryover from Prior Rounds` — every prior issue with
+   one-line disposition (`resolved` / `partially_addressed` /
+   `still_open` / `obsolete`). Cite source review file inline.
+
+3. **New issues are net-new.** Every issue you put under
+   `## Claim-to-Evidence Support` / `## Citation Reality` / etc.
+   must NOT appear in the prior baseline. Severity counts in the
+   frontmatter reflect new-this-round only.
+
+4. **Frontmatter `round_number: R`** (1-indexed; reset only when a
+   new draft revision is submitted, e.g., `draft8.md` after
+   `draft7.md` → reset to round 1 against the new draft, but
+   carryover should track which prior-draft-review issues remain).
+
+5. **First round of a new draft** has no carryover from the same
+   draft, but issues from prior-draft reviews still belong in
+   carryover (with disposition: did the new draft address them?).
+
+6. **Severity revisions** (upgrade / downgrade prior issue) belong
+   in carryover with revision explained — not as new issues.
 
 ## Focus areas
 
@@ -354,26 +390,53 @@ date: YYYY-MM-DD
 project: {project_id}
 draft: papers/draft{N}.md
 review_number: {N}
+round_number: {N}
 prompt_version: adversarial_paper.v1
+# severity_counts: NEW issues raised THIS ROUND only.
 severity_counts:
   critical: {N}
   important: {N}
   suggested: {N}
+# Disposition of prior-draft-review issues. Zeros if first review of
+# this draft.
+prior_round_disposition:
+  resolved: {N}
+  partially_addressed: {N}
+  still_open: {N}
+  obsolete: {N}
 biological_claims_checked: {N}
 biological_claims_flagged: {N}
 citations_sampled: {N}
 citations_unverified: {N}
 through_line_drift: none | minor | major
+# Prior reviews considered. Includes reviews of earlier drafts AND
+# earlier reviews of this same draft (e.g., draft7-review.md AND
+# draft7-review_v2.md).
 prior_reviews_considered:
-  - papers/draft1-review.md
+  - papers/FINAL_REVIEW.md  # if consolidated baseline exists
+  # OR earlier drafts and revisions of this draft:
+  # - papers/draft7-review.md
+  # - papers/draft8-review.md
 ---
 
-# Adversarial Paper Review — {Paper Title} (draft {N})
+# Adversarial Paper Review — {Paper Title} (draft {N}, review round {R})
 
 ## Summary
 
-{1–2 paragraphs. Would this paper survive journal review as written?
-What are the top issues?}
+{1–2 paragraphs. Verdict for THIS round of review on this draft.
+State explicitly: "round R of review on draft N; X resolved, Y
+partial, Z still open from prior rounds; N_new new this round."
+Would this paper survive journal review as written?}
+
+## Carryover from Prior Rounds
+
+{If first review of this draft and no prior-draft baseline: write
+`(no prior rounds)` and skip. Otherwise list every prior issue with
+disposition (resolved | partially_addressed | still_open | obsolete),
+citing source review file inline. Do NOT restate the original
+critique. Group under `### Resolved`, `### Partially Addressed`,
+`### Still Open`, `### Obsolete`. Sections below contain ONLY new
+issues raised this round.}
 
 ## Through-Line Coherence
 {Does the story hold? Is THROUGHLINE respected?}
@@ -405,9 +468,6 @@ Limitations honesty.}
 
 ## Drift from REPORT
 {Findings preserved? Numbers match? Silent omissions?}
-
-## Issues from Prior Reviews
-{What the revision addressed; what's still open.}
 
 ## Review Metadata
 - **Reviewer**: BERIL Adversarial Review ({Tool}, {model-id})

@@ -60,6 +60,40 @@ starting points, not verdicts.
   for overlap with existing work
 - `state/learned-patterns.md` (if present) — meta-patterns you have
   flagged in prior plan reviews
+- Prior-round adversarial plan baseline:
+  - If `ADVERSARIAL_PLAN_REVIEW.md` exists, it is the LIVE baseline.
+  - Else use the highest-numbered `ADVERSARIAL_PLAN_REVIEW_*.md`.
+  - `PLAN_REVIEW_*.md` are from the lighter `/berdl-review` and are
+    secondary context, not the adversarial baseline.
+
+## Additivity across rounds
+
+Plan review is iterative and additive. Each round produces a delta
+against the prior baseline — not a fresh full review.
+
+1. **Read the baseline first.** Extract every prior issue (ID,
+   title, severity, location). Maintain that ledger as you read.
+
+2. **Do not restate prior issues with reworded text.** Same
+   underlying problem = same issue, regardless of phrasing.
+
+3. **Carryover comes first.** Lead the body with
+   `## Carryover from Prior Rounds`, listing every prior issue with
+   one-line disposition: `resolved` / `partially_addressed` /
+   `still_open` / `obsolete`. Cite source round inline.
+
+4. **New issues are net-new.** Every issue you put under
+   `## Approach Soundness` / `## Constructive Recommendations` / etc.
+   must NOT appear in the prior baseline. Severity counts in the
+   frontmatter reflect new-this-round only.
+
+5. **Frontmatter `round_number: N`** (1-indexed; persists across
+   consolidation — N keeps incrementing).
+
+6. **Severity revisions** (upgrade / downgrade prior issue) belong
+   in carryover with the revision explained — not as new issues.
+
+7. **First round** has no carryover; write `(no prior rounds)`.
 
 ## Focus areas
 
@@ -337,24 +371,45 @@ type: plan
 date: YYYY-MM-DD
 project: {project_id}
 review_number: {N}
+round_number: {N}
 prompt_version: adversarial_plan.v1
+# severity_counts: NEW issues raised THIS ROUND only.
 severity_counts:
   critical: {N}
   important: {N}
   suggested: {N}
+# Disposition of prior-round issues. All zeros if round 1.
+prior_round_disposition:
+  resolved: {N}
+  partially_addressed: {N}
+  still_open: {N}
+  obsolete: {N}
 literature_searches: {N}
 prior_projects_checked: {N}
+# Prefer ADVERSARIAL_PLAN_REVIEW.md if consolidated; else numbered.
 prior_reviews_considered:
-  - PLAN_REVIEW_1.md
-  - ADVERSARIAL_PLAN_REVIEW_1.md
+  - ADVERSARIAL_PLAN_REVIEW.md  # if consolidated baseline exists
+  # OR:
+  # - ADVERSARIAL_PLAN_REVIEW_2.md
 ---
 
-# Adversarial Plan Review — {Project Title}
+# Adversarial Plan Review — {Project Title} (round {N})
 
 ## Summary
 
-{1 paragraph. Overall verdict on the plan. Can it produce a solid
-project as stated? What would prevent that?}
+{1 paragraph. Overall verdict on the plan for THIS round. State
+explicitly: "round N of an iterative review; X resolved, Y partial,
+Z still open from prior; N_new new this round." Can the plan produce
+a solid project as stated? What would prevent that?}
+
+## Carryover from Prior Rounds
+
+{If round 1: write `(no prior rounds)` and skip. Otherwise list every
+prior issue with disposition (resolved | partially_addressed |
+still_open | obsolete), citing source-round inline. Do NOT restate
+the original critique. Group under `### Resolved`,
+`### Partially Addressed`, `### Still Open`, `### Obsolete`. The
+sections below contain ONLY new issues raised this round.}
 
 ## Question and Hypothesis
 {Sharpness, falsifiability, alignment with approach.}
@@ -410,9 +465,6 @@ anticipate?}
 - **{cut or add}** — rationale.
 - ...
 
-## Issues from Prior Reviews
-{What's still open from earlier plan reviews.}
-
 ## Review Metadata
 - **Reviewer**: BERIL Adversarial Review ({Tool}, {model-id})
 - **Date**: {YYYY-MM-DD}
@@ -435,7 +487,12 @@ anticipate?}
   Adversarial means flagging plausibility-as-evidence even in plan
   review.
 - **Frontmatter / body self-consistency.** Severity counts in the
-  frontmatter must match the issues itemized in the body.
+  frontmatter must match the NEW issues itemized in the body — they
+  do NOT include carryover from prior rounds. Carryover dispositions
+  go under `prior_round_disposition` separately.
+- **Additivity is non-negotiable.** Do not re-raise a prior issue
+  under new wording. Same underlying mechanism = same issue, goes in
+  Carryover with `still_open` disposition.
 - **Show your work for numerical claims.** Power calculations, FWER
   estimates, and similar feasibility computations should have their
   code/inputs visible.
