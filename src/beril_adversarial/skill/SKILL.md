@@ -34,7 +34,7 @@ the right system prompt — same pattern as BERIL's `tools/review.sh`.
 ### `/beril-adversarial` — run a review
 
 ```
-/beril-adversarial [<project_id>] [--type plan|project|paper]
+/beril-adversarial [<project_id>|<draft_dir>] [--type plan|project|paper|presentation]
                    [--reviewer claude|codex|claude,codex]
                    [--model <model_id>]
                    [--depth quick|standard|deep]
@@ -45,8 +45,14 @@ the right system prompt — same pattern as BERIL's `tools/review.sh`.
 **Arguments:**
 
 - `<project_id>` — project directory under `projects/`. Optional if cwd
-  is inside `projects/<id>/`.
-- `--type plan|project|paper` — what to review. Default `project`.
+  is inside `projects/<id>/`. Used for `--type plan|project|paper`.
+- `<draft_dir>` — absolute path to a presentation-maker draft
+  directory (e.g., `projects/<id>/talks/draft_<N>/`). Required for
+  `--type presentation`; cwd auto-detection is not supported.
+- `--type plan|project|paper|presentation` — what to review. Default
+  `project`. The `presentation` type writes
+  `<draft_dir>/audit/adversarial_review.{md,json}`; the JSON is the
+  consumer contract for the presentation-maker review-rewrite loop.
 - `--reviewer claude|codex|claude,codex` — backend. Default `claude`.
   `claude,codex` runs both in parallel and fuses the results.
 - `--model <model_id>` — override default model.
@@ -88,6 +94,17 @@ the right system prompt — same pattern as BERIL's `tools/review.sh`.
 - `paper` — reads `papers/draft{N}.md` (highest N), THROUGHLINE,
   bibliography, citation-map, REPORT, figures; writes
   `papers/draft{N}-review.md` co-located with the draft.
+- `presentation` — reads `<draft_dir>/slide_spec.json`,
+  `00_throughline.md`, `02_substories.md`,
+  `03_slides/qa_anticipated.json`, project's `REPORT.md` and
+  `RESEARCH_PLAN.md`. Writes `<draft_dir>/audit/adversarial_review.md`
+  (human-readable) + `<draft_dir>/audit/adversarial_review.json`
+  (machine-readable; consumer contract).
+  Single-pass v1: skips `--reviewer claude,codex` fusion, depth
+  variants, `--consolidate`, the compliance critic, and citation
+  verification. Tools granted to the reviewer subprocess are narrowed
+  to `Read, Write, Grep, Glob` (no WebSearch — would invite citation
+  fabrication on a deck which has no canonical bibliography).
 
 **Tools granted to the reviewer subprocess:**
 `Read, Write, Bash, Grep, Glob, WebSearch, Agent, ToolSearch`. Richer
@@ -234,6 +251,7 @@ Discipline rules in the system prompts keep growth bounded.
 | Pre-publication review of a project | `/beril-adversarial --type project` |
 | Plan stage, before data collection / analysis | `/beril-adversarial --type plan` |
 | Paper draft from `/beril-paper` | `/beril-adversarial --type paper` |
+| Presentation draft from `/beril-presentation-maker` | `/beril-adversarial --type presentation <draft_dir>` |
 | Multi-perspective second opinion | `/beril-adversarial --reviewer claude,codex` |
 | Consolidating review history into a single canonical doc | `/beril-adversarial --consolidate` |
 

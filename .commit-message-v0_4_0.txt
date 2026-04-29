@@ -1,0 +1,76 @@
+v0.4.0: --type presentation mode
+
+Adds adversarial review of beril-presentation-maker draft directories.
+Single-pass reviewer; 7 detection classes; dual output contract
+(audit/adversarial_review.{md,json}); JSON schema_version
+"adversarial-review-presentation.v1" is the consumer contract for
+the presentation-maker review-rewrite loop (planned v0.3.0).
+
+What ships
+- prompts/adversarial_presentation.v1.md (1746 lines, exceeds spec
+  §11's 1500-line guidance). Operationalizes spec §4's seven
+  detection classes (throughline integrity, claim-evidence
+  load-bearing, tier-language register, Q&A anti-strawman,
+  substory→slide arc, missing-slide / coverage gaps, deck's biggest
+  narrative weakness). EIGHT worked examples grounded in real
+  draft_9 slides: register-drift on slide 14, missing-slide for
+  top-N candidates, Q&A softball on slide 22, substory-arc burial
+  in S3, throughline filler punchline (S2 vs S3), narrative_weakness
+  killshot template, caveat-burial on slide 18 (Class 2 sub-pattern,
+  added post-first-live-run), and Q&A "appears defensive but doesn't
+  land" pattern on slide 22 (added post-first-live-run after first
+  run emitted "No findings" on Q&A class). Self-skepticism pass
+  includes per-class verification + explicit "No findings on Q&A is
+  a sign-of-failure" trigger + caveat-burial cross-reference.
+- tools/adversarial_review.sh: new run_presentation_review function
+  with early dispatch (skips PROJECT_ID + cd "$BERIL_ROOT" — paper/
+  project/plan-shaped). Validates draft_dir + slide_spec.json +
+  00_throughline.md + 02_substories.md + 03_slides/qa_anticipated.json
+  + REPORT.md (truth source for quantitative grounding). Rejects
+  --consolidate, --reviewer codex, --reviewer claude,codex with
+  diagnostic. Tools narrowed to Read,Write,Grep,Glob (no WebSearch
+  — would invite citation fabrication on a deck with no canonical
+  bibliography).
+- tools/validate_presentation_review.py: programmatic post-checker.
+  Verifies schema literal, required-field presence, severity/class
+  enum membership, summary-count consistency vs. actual array
+  contents, finding-id uniqueness, narrative_weakness invariants
+  (exactly one, severity=info). Advisory warnings for zero-P0 on
+  20+ slide decks (possible under-fire) and missing
+  narrative_weakness. Replicates paper-writer's proven post-checker
+  pattern (feedback_prompt_discipline_needs_post_check.md).
+- tests: 51 new tests across two files — 26 in
+  test_presentation_review.py (prompt content + dispatch validation
+  + documentation + hard-error guards + post-iteration worked-
+  example presence) plus 27 in test_validate_presentation_review.py
+  (validator pass/fail/warn cases + CLI exit codes). Full suite:
+  106/106 pass; no regressions in pre-existing tests.
+- Documentation: README.md, SKILL.md, commands/beril-adversarial.md
+  updated with presentation type + draft_dir argument shape +
+  per-type defaults + dual-output contract.
+- RELEASE_NOTES.md: v0.4.0 narrative + retroactive entries.
+- V0_4_0_PUNCH_LIST.md: tiered-with-deps + smoke-at-gates record;
+  10 architectural decisions baked in.
+
+Acceptance status (per spec §11)
+[x] prompt lands; 1746 lines exceeds spec §11's 1500-line guidance.
+[x] orchestrator dispatch + CLI surface.
+[x] tests ≥5 (51 shipped; full suite 106/106 — no regressions).
+[x] no breaking changes to --type paper/plan/project.
+[x] dual output contract documented + enforced (programmatically
+    via validate_presentation_review.py).
+[x] release notes updated.
+[~] live test against draft_9: first run found 4-5 of 8 spec-listed
+    issues. Iterated prompt with two new worked examples
+    (caveat-burial on slide 18, "appears defensive but doesn't land"
+    Q&A pattern on slide 22) addressing the two gaps. Pending
+    Adam's re-run (≥6 of 8 target).
+
+Skipped (single-pass v1; revisit in v0.4.1+)
+- --consolidate (consumer's loop owns iteration).
+- --reviewer claude,codex fusion (multi-pass is v2).
+- --depth quick|deep (single depth v1).
+- compliance critic + citation verification (paper-shaped; deck
+  has no canonical bibliography).
+
+Architectural decisions: see V0_4_0_PUNCH_LIST.md.

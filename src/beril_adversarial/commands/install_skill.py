@@ -44,6 +44,7 @@ _EXECUTABLE_FILES = (
     "tools/stream_progress.py",
     "tools/aggregate_metadata.py",
     "tools/verify_citations.py",
+    "tools/validate_presentation_review.py",
 )
 
 

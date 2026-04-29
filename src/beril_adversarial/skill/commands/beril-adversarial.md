@@ -1,15 +1,17 @@
 ---
-description: Run a harsh adversarial review of a BERDL project, plan, or paper. Supports multi-model fusion, depth tiers, and provenance-tracked consolidation.
-argument-hint: [<project_id>] [--type plan|project|paper] [--reviewer claude|codex|claude,codex] [--model <model_id>] [--depth quick|standard|deep] [--no-stream] [--no-critic] [--consolidate]
+description: Run a harsh adversarial review of a BERDL project, plan, paper, or presentation. Supports multi-model fusion, depth tiers, and provenance-tracked consolidation.
+argument-hint: [<project_id>|<draft_dir>] [--type plan|project|paper|presentation] [--reviewer claude|codex|claude,codex] [--model <model_id>] [--depth quick|standard|deep] [--no-stream] [--no-critic] [--consolidate]
 allowed-tools: Bash, Read, Write
 ---
 
 # /beril-adversarial
 
-Run an adversarial review of the project, plan, or paper draft at
-`projects/<project_id>/`. Harsher and more detail-oriented than
-`/berdl-review`. Supports multi-model fusion and consolidation across
-rounds.
+Run an adversarial review of the project, plan, paper draft, or
+presentation draft at `projects/<project_id>/` (for plan/project/paper)
+or at an absolute draft_dir path (for presentation, e.g.
+`projects/<id>/talks/draft_<N>/`). Harsher and more detail-oriented
+than `/berdl-review`. Supports multi-model fusion and consolidation
+across rounds for paper/project/plan; presentation is single-pass v1.
 
 ## Step 1 — Verify the package is installed
 
@@ -35,10 +37,11 @@ Stop here if the command is missing. Do not try fallback installs.
 
 ## Step 2 — Resolve the project
 
-If the user passed `<project_id>` explicitly, use it.
+For `--type plan|project|paper`:
 
-Otherwise, check if cwd is inside `projects/<id>/` and auto-detect.
-If neither: ask the user via AskUserQuestion which project to review.
+If the user passed `<project_id>` explicitly, use it. Otherwise, check
+if cwd is inside `projects/<id>/` and auto-detect. If neither: ask the
+user via AskUserQuestion which project to review.
 
 Validate that `projects/<project_id>/` exists. If not, stop with an
 error.
@@ -46,6 +49,20 @@ error.
 For `--type paper`: also confirm `projects/<project_id>/papers/`
 contains at least one `draft{N}.md`. If not, tell the user the paper
 directory is empty and stop.
+
+For `--type presentation`:
+
+The first positional argument is a `<draft_dir>` (absolute path), not
+a project_id. Validate that the path exists and contains
+`slide_spec.json` plus `00_throughline.md` plus `02_substories.md`
+plus `03_slides/qa_anticipated.json`. The reviewer also requires the
+project's `REPORT.md` (resolved as `<draft_dir>/../../REPORT.md`); if
+absent, stop with an error — it's the truth source for quantitative
+grounding.
+
+If the user did not pass an explicit draft_dir, ask via
+AskUserQuestion. Auto-detection by cwd is not supported for
+presentation type.
 
 ## Step 3 — Invoke the reviewer
 
@@ -60,7 +77,7 @@ abort.
 From BERIL_ROOT:
 
     bash .claude/skills/beril-adversarial/tools/adversarial_review.sh \
-        <project_id> \
+        <project_id|draft_dir> \
         --type <type> \
         --reviewer <reviewer> \
         --depth <depth> \
@@ -70,14 +87,25 @@ From BERIL_ROOT:
 - Omit `--type` if `project` (default).
 - Omit `--reviewer` if `claude` (default). Use `codex` for an
   alternative perspective. Use `claude,codex` for parallel reviews
-  with fusion.
+  with fusion. (Both alternatives are unsupported for `--type
+  presentation` in v1; the script will reject them.)
 - Omit `--depth` if `standard` (default; ~5-10 minutes). Pass `quick`
   (~1-2 minutes, skips subagents) for fast iteration during
   development. Pass `deep` (~15-25 minutes) for thorough
-  pre-publication review.
+  pre-publication review. (Depth flag is ignored for `--type
+  presentation`; v1 is single-depth.)
 - Omit `--model` to use the per-reviewer default.
 - Pass `--consolidate` to skip review and synthesize numbered reviews
-  into a canonical file.
+  into a canonical file. (Unsupported for `--type presentation`;
+  iteration is owned by presentation-maker's review-rewrite loop.)
+- For `--type presentation`: the positional argument is the
+  `<draft_dir>` (absolute path), not a project_id. Output is two
+  files written into `<draft_dir>/audit/`:
+  `adversarial_review.md` (human-readable) + `adversarial_review.json`
+  (machine-readable; consumer contract for the
+  presentation-maker review-rewrite loop). The compliance critic and
+  citation verification gate are skipped (the prompt enforces JSON
+  validity itself; the deck has no canonical bibliography to verify).
 
 The script auto-numbers output files race-safely. Multi-reviewer
 fusion runs both backends in parallel and produces three artifacts:
@@ -88,11 +116,28 @@ numbered file.
 
 After the script returns:
 
+For `--type plan|project|paper`:
+
 1. Check the output file exists and is non-empty.
 2. Confirm it has YAML frontmatter (`grep -q '^---' <file>`).
 3. If validation fails, tell the user and stop.
 
+For `--type presentation`:
+
+1. Check that BOTH `<draft_dir>/audit/adversarial_review.md` and
+   `<draft_dir>/audit/adversarial_review.json` exist and are
+   non-empty.
+2. Validate the JSON parses and has `schema_version:
+   "adversarial-review-presentation.v1"`. The script does this
+   sanity check via python3 if available; verify the output mentions
+   `JSON OK: N slide-level findings, M deck-level findings`.
+3. If either file is missing or the JSON is invalid, tell the user
+   and stop. Re-running often resolves stochastic Write-tool
+   failures.
+
 ## Step 5 — Present summary
+
+For `--type plan|project|paper`:
 
 Read the output file's frontmatter and Summary section. Present a
 brief summary to the user:
@@ -116,6 +161,23 @@ brief summary to the user:
       followed by `Compliance critic (post-fix): PASS` (fix worked)
     - `Compliance critic (post-fix): N violation(s) remain.` (fix
       didn't fully land; audit log preserved at `<output>.audit2.md`)
+
+For `--type presentation`:
+
+Read `<draft_dir>/audit/adversarial_review.json` and present:
+
+- Total findings + severity breakdown (P0 / P1 / P2 / info)
+- By-class breakdown (throughline, claim_evidence, register_drift,
+  qa_softball, substory_arc, missing_slide, unbacked_quantitative,
+  narrative_weakness)
+- Top 3-5 P0 findings: slide_id + one-line issue
+- The single Class 7 narrative_weakness finding (the deck's biggest
+  weakness; informational severity)
+- Pointer to both output files
+- Note that the JSON is the consumer contract for the
+  presentation-maker review-rewrite loop (planned v0.3.0); the user
+  can act on the .md directly or wait for the loop to operationalize
+  fixes
 
 ## Step 6 — Guidance
 
@@ -162,14 +224,22 @@ If `--consolidate` was passed:
 - For `--type paper`: the script picks the highest-numbered
   `draft{N}.md` automatically. Output is co-located with the draft as
   `papers/draft{N}-review.md`.
+- For `--type presentation`: the user must pass an explicit
+  `<draft_dir>` (absolute path). Output overwrites
+  `<draft_dir>/audit/adversarial_review.{md,json}` on each run; there
+  is no auto-numbering. If the user wants to preserve a prior
+  review, they should rename or move the `audit/` directory before
+  re-running.
 - The shell script handles all error paths (missing project, invalid
   type, script-not-installed, reviewer subprocess failure) and exits
   non-zero with a diagnostic. Surface stderr verbatim if the script
   fails.
 - This command never edits project files. All output goes to numbered
-  review files or canonical review files in the project directory.
+  review files or canonical review files in the project directory,
+  or (for presentation) to `<draft_dir>/audit/`.
 - If WebSearch is unavailable, biological-claim verification will be
   skipped silently; the review will note this in its Summary.
+  Presentation reviews do not use WebSearch.
 
 ## Pitfall detection
 

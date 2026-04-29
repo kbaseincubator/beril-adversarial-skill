@@ -1,8 +1,8 @@
 # beril-adversarial-skill
 
 A harsh, detail-oriented adversarial reviewer for BERDL analysis projects,
-research plans, and paper drafts. Distributed as a Claude Code skill that
-runs inside a BERIL deployment.
+research plans, paper drafts, and presentation drafts. Distributed as a
+Claude Code skill that runs inside a BERIL deployment.
 
 Built as a complement to BERIL's `/berdl-review` (the lighter automated
 review), `/beril-adversarial` is meant for the moment you want a senior
@@ -12,12 +12,17 @@ flagging of inferential leaps.
 
 ## Status
 
-v0.3.0 — adds additivity discipline for multi-round reviews.
-Carryover-from-Prior-Rounds section comes first; severity counts
-reflect new-this-round only; canonical consolidated file is the live
-baseline for the next round. v0.2.0 added the programmatic citation
-verification gate (Crossref + NCBI PubMed). System prompts remain at
-`.v1.md`; no breaking changes to slash commands or output paths.
+v0.4.0 — adds `--type presentation` mode for adversarial review of
+`beril-presentation-maker` draft directories. Single-pass v1; 7
+detection classes (throughline integrity, claim-evidence load-bearing,
+register drift, Q&A softball, substory arc, missing slides, narrative
+weakness); dual output (`audit/adversarial_review.md` +
+`audit/adversarial_review.json` with `schema_version
+adversarial-review-presentation.v1` as consumer contract for the
+presentation-maker review-rewrite loop). v0.3.0 added additivity
+discipline for multi-round reviews. v0.2.0 added the programmatic
+citation verification gate. System prompts remain at `.v1.md`; no
+breaking changes to existing `--type plan|project|paper` modes.
 
 ## Install
 
@@ -61,7 +66,8 @@ release: `pipx upgrade beril-adversarial-skill && beril-adversarial install-skil
 From inside a BERIL deployment, in Claude Code:
 
 ```
-/beril-adversarial [<project_id>] [--type plan|project|paper]
+/beril-adversarial [<project_id>|<draft_dir>]
+                   [--type plan|project|paper|presentation]
                    [--reviewer claude|codex|claude,codex]
                    [--model <model_id>]
                    [--depth quick|standard|deep]
@@ -71,12 +77,19 @@ From inside a BERIL deployment, in Claude Code:
 
 **Common defaults work:** `/beril-adversarial my_project` is enough
 for a standard project review.
+`/beril-adversarial /abs/path/to/talks/draft_9 --type presentation`
+runs the presentation reviewer.
 
 ### Flags
 
-- `<project_id>` — project directory under `projects/`. Auto-detected
-  from cwd if you're inside `projects/<id>/`.
-- `--type plan|project|paper` — what to review (default `project`).
+- `<project_id>|<draft_dir>` — project directory under `projects/`
+  (auto-detected from cwd if inside `projects/<id>/`) for plan/project/
+  paper reviews; absolute path to a presentation-maker draft directory
+  for `--type presentation`.
+- `--type plan|project|paper|presentation` — what to review (default
+  `project`). The `presentation` type writes
+  `<draft_dir>/audit/adversarial_review.{md,json}`; the JSON is the
+  consumer contract for the presentation-maker review-rewrite loop.
 - `--reviewer claude|codex|claude,codex` — backend (default `claude`).
   Pass `claude,codex` for parallel multi-model review with dated-provenance
   fusion.

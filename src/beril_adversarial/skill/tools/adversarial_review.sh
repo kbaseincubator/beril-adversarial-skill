@@ -6,8 +6,18 @@
 #     [--reviewer claude|codex|claude,codex] [--model <model_id>] \
 #     [--beril-root <path>] [--consolidate] [--output <path>]
 #
+#   adversarial_review.sh <draft_dir> --type presentation \
+#     [--model <model_id>] [--beril-root <path>]
+#
 # Mirrors BERIL's tools/review.sh. Differences:
-#   - Three review types (plan, project, paper) instead of two.
+#   - Four review types (plan, project, paper, presentation).
+#   - --type presentation takes a draft_dir (talks/draft_N) as its
+#     positional argument instead of a project_id, and writes both an
+#     audit/adversarial_review.md and audit/adversarial_review.json
+#     into the draft_dir. Critic + verify_citations + consolidation
+#     + fusion are all skipped for presentation type — the prompt
+#     enforces output validity itself, the JSON is the consumer
+#     contract for presentation-maker's review-rewrite loop.
 #   - Multi-reviewer fusion when --reviewer claude,codex: runs both in
 #     parallel, then a third fusion call produces the unified review.
 #   - --consolidate path: synthesize all numbered reviews of the matching
@@ -50,14 +60,24 @@ CLAUDE_TOOLS="Read,Write,Bash,Grep,Glob,WebSearch,Agent,ToolSearch"
 usage() {
   local exit_code="${1:-0}"
   cat <<EOF
-Usage: adversarial_review.sh <project_id> [options]
+Usage: adversarial_review.sh <project_id|draft_dir> [options]
 
 Arguments:
-  project_id                  Project directory name under projects/
-                              (optional if cwd is inside projects/<id>/)
+  project_id                  For --type plan|project|paper: project
+                              directory name under projects/ (optional
+                              if cwd is inside projects/<id>/).
+  draft_dir                   For --type presentation: absolute path
+                              to a presentation-maker draft directory
+                              (talks/draft_N). Required.
 
 Options:
-  --type plan|project|paper   Review type (default: project)
+  --type plan|project|paper|presentation
+                              Review type (default: project).
+                              presentation takes a draft_dir, not a
+                              project_id; writes audit/adversarial_review.{md,json}
+                              into the draft_dir. Skips critic +
+                              verify_citations + consolidation +
+                              fusion (all of which are paper/project-shaped).
   --reviewer R                claude | codex | claude,codex
                               (claude,codex runs both in parallel and
                               fuses the results; default: claude)
@@ -96,6 +116,7 @@ Examples:
   adversarial_review.sh my_project --depth deep            # thorough
   adversarial_review.sh my_project --type paper --reviewer claude,codex
   adversarial_review.sh my_project --consolidate
+  adversarial_review.sh /abs/path/to/projects/foo/talks/draft_9 --type presentation
 EOF
   exit "$exit_code"
 }
@@ -174,8 +195,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --- Validate --type ---
-if [[ "$REVIEW_TYPE" != "plan" && "$REVIEW_TYPE" != "project" && "$REVIEW_TYPE" != "paper" ]]; then
-  echo "Error: --type must be plan|project|paper, got '$REVIEW_TYPE'" >&2
+if [[ "$REVIEW_TYPE" != "plan" \
+   && "$REVIEW_TYPE" != "project" \
+   && "$REVIEW_TYPE" != "paper" \
+   && "$REVIEW_TYPE" != "presentation" ]]; then
+  echo "Error: --type must be plan|project|paper|presentation, got '$REVIEW_TYPE'" >&2
   exit 1
 fi
 
@@ -225,6 +249,283 @@ fi
 
 # Ensure state/ exists (for learned-patterns.md).
 mkdir -p "$STATE_DIR"
+
+# ==============================================================================
+# Presentation review path (early dispatch — separate from project/plan/paper)
+#
+# Why early dispatch: presentation takes a draft_dir (absolute path), not a
+# project_id under projects/. The PROJECT_ID resolution + cd "$BERIL_ROOT"
+# below is paper/project/plan-shaped and would either reject the absolute-path
+# argument or cd to the wrong place.
+#
+# The presentation reviewer:
+#   - reads slide_spec.json + 00_throughline.md + 02_substories.md +
+#     <project>/REPORT.md + <project>/RESEARCH_PLAN.md +
+#     03_slides/qa_anticipated.json (+ optional 04_speaker_notes/);
+#   - writes BOTH audit/adversarial_review.md and audit/adversarial_review.json
+#     into the draft_dir (the .json is the consumer contract for the
+#     presentation-maker review-rewrite loop).
+#
+# Skipped (vs. paper/project/plan path):
+#   - --consolidate (presentation iteration is owned by the consumer's
+#     review-rewrite loop, not by this script).
+#   - --reviewer claude,codex fusion (single-pass v1; multi-pass is v2).
+#   - compliance critic + fix pass (the prompt enforces JSON validity
+#     itself; running a critic on dual-file output is non-trivial).
+#   - citation verification gate (presentation slides don't have
+#     bibliographic citations the way paper drafts do).
+#   - --depth quick|deep (single depth for v1; revisit if needed).
+# ==============================================================================
+run_presentation_review() {
+  if [[ "$CONSOLIDATE" == "1" ]]; then
+    echo "Error: --consolidate is not supported for --type presentation." >&2
+    echo "Iteration is owned by presentation-maker's review-rewrite loop." >&2
+    exit 1
+  fi
+  if [[ "$REVIEWER" == "claude,codex" ]]; then
+    echo "Error: --reviewer claude,codex (fusion) is not supported for --type presentation in v1." >&2
+    exit 1
+  fi
+  if [[ "$REVIEWER" == "codex" ]]; then
+    echo "Error: --reviewer codex is not supported for --type presentation." >&2
+    echo "The presentation reviewer requires programmatic Write verification, which is" >&2
+    echo "claude-only. Run with --reviewer claude (the default)." >&2
+    exit 1
+  fi
+
+  if [[ -z "$PROJECT_ID" ]]; then
+    echo "Error: --type presentation requires a draft_dir argument" >&2
+    echo "  Example: adversarial_review.sh /abs/path/to/talks/draft_9 --type presentation" >&2
+    exit 1
+  fi
+
+  # PROJECT_ID is being used as the draft_dir for this code path.
+  local DRAFT_DIR="$PROJECT_ID"
+
+  # Resolve to absolute path. If user passed a relative path, resolve
+  # against the cwd at script invocation (BEFORE we've cd'd anywhere).
+  if [[ ! -d "$DRAFT_DIR" ]]; then
+    echo "Error: draft_dir does not exist: $DRAFT_DIR" >&2
+    exit 2
+  fi
+  DRAFT_DIR="$(cd "$DRAFT_DIR" && pwd -P)"
+
+  # Required input files (per SPEC §2)
+  local SLIDE_SPEC="$DRAFT_DIR/slide_spec.json"
+  local THROUGHLINE="$DRAFT_DIR/00_throughline.md"
+  local SUBSTORIES="$DRAFT_DIR/02_substories.md"
+  local QA_FILE="$DRAFT_DIR/03_slides/qa_anticipated.json"
+
+  for required in "$SLIDE_SPEC" "$THROUGHLINE" "$SUBSTORIES" "$QA_FILE"; do
+    if [[ ! -f "$required" ]]; then
+      echo "Error: required input missing: $required" >&2
+      echo "  draft_dir does not look like a presentation-maker draft directory." >&2
+      exit 2
+    fi
+  done
+
+  # project_dir = draft_dir/../.. (talks/draft_N → ../.. → project_dir)
+  local PROJECT_DIR_LOCAL
+  PROJECT_DIR_LOCAL="$(cd "$DRAFT_DIR/../.." && pwd -P)"
+  local REPORT_FILE="$PROJECT_DIR_LOCAL/REPORT.md"
+  local PLAN_FILE="$PROJECT_DIR_LOCAL/RESEARCH_PLAN.md"
+
+  if [[ ! -f "$REPORT_FILE" ]]; then
+    echo "Error: REPORT.md not found at $REPORT_FILE" >&2
+    echo "  Resolved project_dir from draft_dir/../.. = $PROJECT_DIR_LOCAL" >&2
+    echo "  This is the truth source for quantitative grounding; cannot review without it." >&2
+    exit 2
+  fi
+  if [[ ! -f "$PLAN_FILE" ]]; then
+    echo "Warning: RESEARCH_PLAN.md not found at $PLAN_FILE; proceeding without it." >&2
+    PLAN_FILE=""
+  fi
+
+  # Project_id from the path (best-effort, used in YAML frontmatter).
+  local PROJECT_ID_LOCAL
+  PROJECT_ID_LOCAL="$(basename "$PROJECT_DIR_LOCAL")"
+
+  # Draft number from the directory name (best-effort).
+  local DRAFT_BASENAME DRAFT_NUMBER
+  DRAFT_BASENAME="$(basename "$DRAFT_DIR")"
+  DRAFT_NUMBER="${DRAFT_BASENAME#draft_}"
+  # If the basename didn't match draft_<N>, fall back to the basename itself.
+  if [[ "$DRAFT_NUMBER" == "$DRAFT_BASENAME" ]]; then
+    DRAFT_NUMBER="$DRAFT_BASENAME"
+  fi
+
+  local SYSTEM_PROMPT_FILE="$PROMPTS_DIR/adversarial_presentation.v1.md"
+  if [[ ! -f "$SYSTEM_PROMPT_FILE" ]]; then
+    echo "Error: presentation system prompt not found: $SYSTEM_PROMPT_FILE" >&2
+    echo "Run 'beril-adversarial install-skill <BERIL_ROOT>' to refresh." >&2
+    exit 2
+  fi
+
+  # Output paths (under draft_dir/audit/)
+  local AUDIT_DIR="$DRAFT_DIR/audit"
+  mkdir -p "$AUDIT_DIR"
+  local OUT_MD="$AUDIT_DIR/adversarial_review.md"
+  local OUT_JSON="$AUDIT_DIR/adversarial_review.json"
+
+  # Optional speaker_notes pointer (a directory, not a file).
+  local SPEAKER_NOTES_DIR="$DRAFT_DIR/04_speaker_notes"
+  local SPEAKER_NOTES_HINT=""
+  if [[ -d "$SPEAKER_NOTES_DIR" ]]; then
+    SPEAKER_NOTES_HINT="
+  - Speaker notes directory (optional): $SPEAKER_NOTES_DIR"
+  fi
+
+  # Resolve model
+  if [[ -z "$MODEL" ]]; then
+    MODEL="$CLAUDE_DEFAULT_MODEL"
+  fi
+
+  # Tools: narrower than paper reviewer. Read/Write/Grep/Glob only;
+  # NO WebSearch (would invite citation fabrication on a deck which
+  # has no canonical bibliography to verify against), NO Bash (the
+  # work is grep-and-compare), NO Agent (single-pass v1).
+  local PRESENTATION_TOOLS="Read,Write,Grep,Glob"
+
+  local REVIEW_PROMPT="Adversarially review the presentation draft at:
+  ${DRAFT_DIR}
+
+Inputs (read all in full before flagging anything):
+  - slide_spec.json: ${SLIDE_SPEC}
+  - 00_throughline.md: ${THROUGHLINE}
+  - 02_substories.md: ${SUBSTORIES}
+  - REPORT.md (truth source for quantitative grounding): ${REPORT_FILE}
+  - RESEARCH_PLAN.md: ${PLAN_FILE:-(not found — proceed without)}
+  - Q&A: ${QA_FILE}${SPEAKER_NOTES_HINT}
+
+YOUR JOB: produce TWO files via the Write tool:
+  1. ${OUT_JSON}  (machine-readable; consumer contract; write FIRST)
+  2. ${OUT_MD}    (human-readable report; write SECOND)
+
+Both paths are absolute — use them exactly as given.
+
+The reviews are delivered ONLY by invoking Write twice. Producing
+either review as a chat response means it is lost. Before producing
+your final response, verify in your reasoning that you invoked Write
+exactly twice, once for each path above. If you cannot point at two
+Write tool calls you made, you have not finished the task — invoke
+Write now.
+
+In the JSON, set:
+  - reviewer_model: ${MODEL}
+  - prompt_version: adversarial_presentation.v1
+  - project_id: ${PROJECT_ID_LOCAL}
+  - draft_number: ${DRAFT_NUMBER}
+  - draft_dir: ${DRAFT_DIR}
+
+In the .md frontmatter, set:
+  - reviewer: BERIL Adversarial Review (Presentation, ${MODEL})
+  - project_id: ${PROJECT_ID_LOCAL}
+  - draft_number: ${DRAFT_NUMBER}
+  - prompt_version: adversarial_presentation.v1
+
+Follow the system prompt's detection protocol exactly. Walk every
+content slide; run all 7 detection classes. Do not stop early.
+Quote both sides for every claim_evidence and register_drift
+finding. Recount the summary block before emitting JSON."
+
+  echo "Invoking Claude presentation reviewer (model: ${MODEL})..."
+  echo "  Draft dir: ${DRAFT_DIR}"
+  echo "  Report:    ${REPORT_FILE}"
+  echo "  Output MD: ${OUT_MD}"
+  echo "  Output JSON: ${OUT_JSON}"
+
+  if ! command -v claude &>/dev/null; then
+    echo "Error: 'claude' CLI is not installed or not in PATH" >&2
+    exit 3
+  fi
+
+  local sys_prompt
+  sys_prompt="$(cat "$SYSTEM_PROMPT_FILE")"
+
+  # Direct claude invocation — we do NOT pipe through stream_progress.py
+  # because that helper is wired for a single expected_write_path. The
+  # presentation reviewer writes two files; we verify both post-hoc
+  # and let claude's text output flow to stdout for the user to watch.
+  local rc=0
+  CLAUDECODE= claude -p \
+    --model "$MODEL" \
+    --system-prompt "$sys_prompt" \
+    --allowedTools "$PRESENTATION_TOOLS" \
+    --dangerously-skip-permissions \
+    "$REVIEW_PROMPT" \
+    < /dev/null \
+    || rc=$?
+
+  if [[ $rc -ne 0 ]]; then
+    echo "Error: claude invocation failed (exit $rc)" >&2
+    exit 2
+  fi
+
+  # Verify both output files landed.
+  local missing=()
+  if [[ ! -s "$OUT_JSON" ]]; then
+    missing+=( "$OUT_JSON" )
+  fi
+  if [[ ! -s "$OUT_MD" ]]; then
+    missing+=( "$OUT_MD" )
+  fi
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "Error: reviewer did not write the expected files:" >&2
+    for f in "${missing[@]}"; do
+      echo "  - $f" >&2
+    done
+    echo "This is a known stochastic failure mode of claude -p with rich tool" >&2
+    echo "grants — re-run the command. If it persists, the prompt may need" >&2
+    echo "tightening (see prompts/adversarial_presentation.v1.md self-skepticism)." >&2
+    exit 2
+  fi
+
+  # Programmatic post-checker: validate schema literal, summary count
+  # consistency, required-field presence, severity/class enum membership,
+  # and advisory smells (zero P0s on a 20+ slide deck, missing
+  # narrative_weakness). Pulls into a dedicated script so argv handling
+  # is robust against special chars in paths and so the validator can
+  # do richer checks than a shell heredoc reasonably permits.
+  local VALIDATOR="$SKILL_DIR/tools/validate_presentation_review.py"
+  if command -v python3 &>/dev/null && [[ -f "$VALIDATOR" ]]; then
+    local validator_rc=0
+    python3 "$VALIDATOR" "$OUT_JSON" || validator_rc=$?
+    case $validator_rc in
+      0)
+        : ;;  # pass
+      2)
+        echo "Note: validator emitted advisory warnings (review still shipped)." >&2
+        ;;
+      1)
+        echo "" >&2
+        echo "================================================================" >&2
+        echo "JSON VALIDATION FAILED" >&2
+        echo "================================================================" >&2
+        echo "  The reviewer produced a JSON file that does not conform to the" >&2
+        echo "  adversarial-review-presentation.v1 schema (see errors above)." >&2
+        echo "  The .md report may still be useful, but the .json is not safe" >&2
+        echo "  for the consumer (presentation-maker review-rewrite loop)." >&2
+        echo "  Re-running often resolves stochastic prompt-discipline failures." >&2
+        echo "================================================================" >&2
+        # Note: we do NOT exit nonzero here. The user gets a clear warning
+        # and can decide whether to re-run. Failing hard would discard
+        # work that the .md report still represents.
+        ;;
+      *)
+        echo "Warning: validator exited with unexpected code $validator_rc" >&2
+        ;;
+    esac
+  fi
+
+  echo "Presentation review complete."
+  echo "  JSON: ${OUT_JSON}"
+  echo "  MD:   ${OUT_MD}"
+  exit 0
+}
+
+if [[ "$REVIEW_TYPE" == "presentation" ]]; then
+  run_presentation_review
+fi
 
 # --- Resolve PROJECT_ID ---
 if [[ -z "$PROJECT_ID" ]]; then
