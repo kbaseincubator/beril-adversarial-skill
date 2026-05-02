@@ -51,7 +51,7 @@ NO_CRITIC=0
 # token cost (just HTTP calls to free registries).
 NO_VERIFY_CITATIONS=0
 
-CLAUDE_DEFAULT_MODEL="claude-sonnet-4-20250514"
+CLAUDE_DEFAULT_MODEL="claude-sonnet-4-6"  # v0.5.1: bumped from claude-sonnet-4-20250514 (~12 mo old)
 CODEX_DEFAULT_MODEL="gpt-5.4"
 
 CLAUDE_TOOLS="Read,Write,Bash,Grep,Glob,WebSearch,Agent,ToolSearch"
