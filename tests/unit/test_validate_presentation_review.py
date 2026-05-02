@@ -290,6 +290,94 @@ def test_missing_required_field_on_slide_finding_fails():
     assert any("fix_target" in e for e in errors)
 
 
+# ---------------------------------------------------------------------------
+# v0.5.3: title_quote requirement is class-specific
+#
+# Required for finding classes whose criticism targets specific slide
+# text — register_drift, claim_evidence, qa_softball.
+#
+# Optional for classes whose criticism is structural (substory_arc),
+# about a slide's absence (missing_slide), about deck-level patterns
+# (throughline, narrative_weakness), or about a number whose location
+# may not be the slide title (unbacked_quantitative).
+# ---------------------------------------------------------------------------
+
+
+def _slide_finding_no_title_quote(*, cls: str, slide_id: int = 8):
+    """Build a slide-level finding with all required fields except
+    title_quote. Used to test class-conditional requirement."""
+    return {
+        "id": "F999",
+        "class": cls,
+        "severity": "P1",
+        "confidence": "high",
+        "slide_id": slide_id,
+        "slide_position": slide_id,
+        "slide_layout": "claim_evidence",
+        # NO title_quote
+        "issue": "(test fixture)",
+        "fix_target": "slide_compose.v1.md",
+        "fix_hint": "(test fixture)",
+    }
+
+
+@pytest.mark.parametrize("cls", [
+    "substory_arc",
+    "missing_slide",
+    "throughline",
+    "unbacked_quantitative",
+])
+def test_title_quote_optional_for_non_textual_classes(cls):
+    """v0.5.3: classes whose criticism isn't about specific slide text
+    don't require title_quote even when slide_id is present.
+
+    Live failure 2026-05-02 (substory_arc): sonnet-4-6 review of
+    core_gene_tradeoffs draft_2 produced F015 + F016 as substory_arc
+    findings without title_quote (the criticism was about substory
+    structure, not about specific slide text). Validator rejected;
+    revise loop blocked.
+    """
+    f = _slide_finding_no_title_quote(cls=cls)
+    doc = _make_doc(findings=[f])
+    errors, _, _, _ = validator.validate(doc)
+    title_quote_errors = [e for e in errors if "title_quote" in e]
+    assert title_quote_errors == [], (
+        f"class={cls!r} without title_quote should validate; "
+        f"got errors: {'; '.join(title_quote_errors)}"
+    )
+
+
+@pytest.mark.parametrize("cls", [
+    "register_drift",
+    "claim_evidence",
+    "qa_softball",
+])
+def test_title_quote_required_for_textual_classes(cls):
+    """The classes whose criticism targets specific slide text MUST
+    quote that text for reviewer accountability. Without title_quote,
+    the validator rejects."""
+    f = _slide_finding_no_title_quote(cls=cls)
+    doc = _make_doc(findings=[f])
+    errors, _, _, _ = validator.validate(doc)
+    assert any("title_quote" in e for e in errors), (
+        f"class={cls!r} without title_quote should FAIL; got errors: "
+        f"{'; '.join(errors)}"
+    )
+
+
+def test_substory_arc_finding_still_requires_slide_position_and_layout():
+    """The relaxation is title_quote-only. slide_position and
+    slide_layout remain required."""
+    f = _slide_finding_no_title_quote(cls="substory_arc")
+    del f["slide_position"]
+    del f["slide_layout"]
+    doc = _make_doc(findings=[f])
+    errors, _, _, _ = validator.validate(doc)
+    error_text = "; ".join(errors)
+    assert "slide_position" in error_text
+    assert "slide_layout" in error_text
+
+
 def test_v1_missing_slide_level_field_fails():
     """v1: every entry in findings[] is a slide-level finding and must
     have slide_id + slide_position + slide_layout + title_quote.

@@ -102,6 +102,32 @@ SLIDE_LEVEL_REQUIRED_FIELDS = {
     "title_quote",
 }
 
+# Finding classes for which title_quote is REQUIRED when slide_id is
+# present. The principle: title_quote is needed when the criticism
+# targets specific slide text — the reviewer must quote that text to
+# anchor accountability. For finding classes whose criticism is
+# structural (substory_arc), about a slide's absence (missing_slide),
+# about a deck-level pattern (throughline, narrative_weakness), or
+# about a number whose location may not be the slide title (unbacked_
+# quantitative), the title_quote field is OPTIONAL.
+#
+# v0.5.3 (2026-05-02): live sonnet-4-6 review of core_gene_tradeoffs
+# draft_2 had two failures:
+#   1. F015/F016 (substory_arc class) — these reference existing
+#      slides (slide_id=8, slide_id=15) but criticize substory
+#      structure ("S1 has redundant slide"; "S3 over-budget"). The
+#      reviewer didn't quote a title because the criticism isn't
+#      about the title text. Validator was rejecting these.
+#   2. (Also expected to break, though not seen in this run): missing_
+#      slide findings. The slide doesn't exist; there is no title to
+#      quote. slide_id/slide_position point at insertion location;
+#      slide_layout is the proposed layout for the new slide.
+TITLE_QUOTE_REQUIRED_CLASSES = {
+    "register_drift",
+    "claim_evidence",
+    "qa_softball",
+}
+
 # If the deck has at least this many slides AND the reviewer found
 # zero P0 findings, emit a warning (advisory only — exit 2). The
 # spec's representative draft_9 has 26 slides + 3 P0s; a zero-P0
@@ -242,11 +268,21 @@ def validate(
                 f"{sorted(missing)}"
             )
         if require_slide_fields:
-            missing_slide = SLIDE_LEVEL_REQUIRED_FIELDS - f.keys()
-            if missing_slide:
+            # v0.5.3: title_quote is required only for classes where the
+            # criticism targets specific slide text. For substory_arc,
+            # missing_slide, throughline, narrative_weakness, unbacked_
+            # quantitative — title_quote is optional. See
+            # TITLE_QUOTE_REQUIRED_CLASSES.
+            cls_for_check = f.get("class")
+            if cls_for_check in TITLE_QUOTE_REQUIRED_CLASSES:
+                required = SLIDE_LEVEL_REQUIRED_FIELDS  # incl title_quote
+            else:
+                required = SLIDE_LEVEL_REQUIRED_FIELDS - {"title_quote"}
+            missing_slide_fields = required - f.keys()
+            if missing_slide_fields:
                 errors.append(
                     f"{tag} (id={f.get('id', '?')!r}): missing slide-level "
-                    f"field(s): {sorted(missing_slide)}"
+                    f"field(s): {sorted(missing_slide_fields)}"
                 )
 
         # Field-value validity

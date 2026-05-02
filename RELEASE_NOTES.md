@@ -2,6 +2,68 @@
 
 ---
 
+## v0.5.3 — 2026-05-02 (validator: title_quote class-conditional + model docs)
+
+Two fixes from the live A/B comparison run on
+`core_gene_tradeoffs/draft_2`.
+
+### Fix: title_quote requirement is class-conditional
+
+The validator previously required `title_quote` for any finding
+with `slide_id` present. This was over-strict for finding classes
+whose criticism isn't about specific slide text:
+
+- `substory_arc` — criticism is structural ("this substory is over-
+  budget", "S1 has redundant slide"). Reference slide_id is a
+  representative slide, not the criticism's target.
+- `missing_slide` — by definition, the slide doesn't exist; there
+  is no title to quote.
+- `throughline`, `narrative_weakness`, `unbacked_quantitative` —
+  criticism is about deck-level patterns or numbers whose location
+  may not be the slide title.
+
+Live failure: 2026-05-02 sonnet-4-6 review of `core_gene_tradeoffs/
+draft_2` produced F015 + F016 as `substory_arc` findings without
+title_quote (correctly — the criticism was about S1's redundant
+slide and S3's over-budget arc, not slide text). The validator
+rejected the JSON, blocking the revise loop.
+
+`TITLE_QUOTE_REQUIRED_CLASSES = {"register_drift", "claim_evidence",
+"qa_softball"}`. For these, title_quote is still required when
+slide_id is present — the criticism targets specific slide text and
+the reviewer must quote it for accountability. For other slide-
+level finding classes, title_quote is optional.
+
+5 new tests cover the class-conditional logic: parametrized over
+the 4 optional-quote classes (substory_arc, missing_slide,
+throughline, unbacked_quantitative) and the 3 required-quote
+classes (register_drift, claim_evidence, qa_softball). Plus a test
+that other slide-level fields (slide_position, slide_layout) are
+still required regardless of class.
+
+### New: Model selection documentation in SKILL.md
+
+A new "Model selection" section captures the empirical Sonnet 4.6
+vs Opus 4.6 A/B comparison from the May 2026 live run:
+
+- Sonnet 4.6 default justified: 17 findings vs Opus's 16; ~5× cost
+  ratio doesn't justify the marginal unique catches.
+- Different blind spots — Sonnet catches detail (citation existence,
+  verbatim text), Opus catches methodology grounding + null-
+  hypothesis framing.
+- Fusion (`--reviewer claude,codex`) recommended for high-stakes
+  decks; Sonnet-alone for routine iteration.
+
+### Verification
+
+- 50 tests pass (45 in v0.5.2 + 5 new for class-conditional title_quote).
+- Re-validating the failed `adversarial.sonnet-4-6.json` from the
+  live A/B: validator now reports 0 errors + 4 auto-correctable
+  summary corrections (which exit 2, rewrite summary, allow revise
+  loop to proceed). The JSON is now usable as revise-loop input.
+
+---
+
 ## v0.5.2 — 2026-05-02 (presentation-maker v0.3.1+ layout support)
 
 Cross-skill contract drift fix. presentation-maker v0.3.1

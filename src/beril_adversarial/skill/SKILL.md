@@ -55,7 +55,9 @@ the right system prompt — same pattern as BERIL's `tools/review.sh`.
   consumer contract for the presentation-maker review-rewrite loop.
 - `--reviewer claude|codex|claude,codex` — backend. Default `claude`.
   `claude,codex` runs both in parallel and fuses the results.
-- `--model <model_id>` — override default model.
+- `--model <model_id>` — override default model. Default
+  `claude-sonnet-4-6` (v0.5.1+). See "Model selection" below for
+  empirical comparison data + when alternatives are worth the cost.
 - `--depth quick|standard|deep` — thoroughness. Default `standard`.
   `quick` (~1-2m) skips subagents and bio-claim verification — short
   sharp review for fast iteration. `standard` (~5-10m) is the full
@@ -254,6 +256,76 @@ Discipline rules in the system prompts keep growth bounded.
 | Presentation draft from `/beril-presentation-maker` | `/beril-adversarial --type presentation <draft_dir>` |
 | Multi-perspective second opinion | `/beril-adversarial --reviewer claude,codex` |
 | Consolidating review history into a single canonical doc | `/beril-adversarial --consolidate` |
+
+## Model selection
+
+**Default: `claude-sonnet-4-6`** (set in v0.5.1).
+
+This default is empirically grounded: in May 2026 we ran an A/B
+comparison of Sonnet 4.6 vs Opus 4.6 on the same presentation deck
+(`core_gene_tradeoffs/draft_2`, 23 slides). Both models produced
+publication-quality reviews with substantive overlap on the deck's
+worst issues. Concrete numbers:
+
+| Metric | Sonnet 4.6 | Opus 4.6 |
+|---|---|---|
+| Total findings | 17 | 16 |
+| P0 findings | 7 | 6 |
+| P1 findings | 7 | 9 |
+| Cost (per review, approx) | ~$0.50–1 | ~$2.50–5 |
+| JSON validation | failed (2 false-positive errors; v0.5.3 fixed) | passed |
+
+**Where Sonnet wins:** detail-level checks — specific citation
+existence (caught a hallucinated "Scott et al. 2010" reference), verbatim text-comparison findings, evidence-map inflation in the
+throughline doc.
+
+**Where Opus wins:** methodology grounding (caught two unbacked
+statistical method claims Sonnet missed: "32 bacterial species",
+"Fisher's exact test / BH-FDR"), null-hypothesis thinking (caught
+the deck's strongest absent objection — the integration-depth null
+hypothesis for the OR=1.29 finding).
+
+**Different blind spots, similar coverage.** Neither model
+dominates. Opus produced 1–2 unique high-value findings per review;
+Sonnet produced 3–4 unique findings.
+
+**Verdict: Sonnet 4.6 default. Opus is not worth ~5× cost** for
+adversarial review on a single deck. The marginal Opus catches
+don't justify routing infrastructure complexity.
+
+### When to override the default
+
+```bash
+# Try Opus when stakes are high and budget allows
+.../adversarial_review.sh <draft_dir> --type presentation \
+    --model claude-opus-4-6
+
+# Cross-model fusion catches both blind spots (~2× claude-only cost)
+.../adversarial_review.sh <draft_dir> --type presentation \
+    --reviewer claude,codex
+# Codex (gpt-5.4) reviews in parallel; fusion call consolidates.
+
+# Faster iteration with Haiku (lower quality, NOT recommended for
+# production reviews — keeps inclusion to spot-check)
+.../adversarial_review.sh <draft_dir> --type presentation \
+    --model claude-haiku-4-5-20251001
+```
+
+### When fusion (`--reviewer claude,codex`) is worth the cost
+
+The Opus A/B argued for *blind-spot diversity* over *depth*. Two
+different models reviewing in parallel + fusion is more likely to
+recover both unique-finding sets than one expensive model reviewing
+alone. Consider fusion for:
+
+- Decks destined for high-stakes audiences (program reviews, grant
+  panels, public talks)
+- v1.0 ship-readiness validation (run fusion on the candidate; only
+  release if it passes)
+- One-off deep-dive reviews when cost is amortized across many
+  draft iterations
+
+For routine drafting iterations, Sonnet-alone is sufficient.
 
 ## Notes
 

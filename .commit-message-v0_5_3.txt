@@ -1,0 +1,50 @@
+v0.5.3: validator fix (title_quote class-conditional) + model selection docs
+
+Two fixes from the live Sonnet-vs-Opus A/B comparison on
+core_gene_tradeoffs draft_2.
+
+Fix: title_quote requirement is class-conditional
+
+The validator previously required title_quote on any finding with
+slide_id present. Over-strict for classes whose criticism isn't
+about specific slide text — substory_arc (structural), missing_slide
+(slide doesn't exist), throughline, narrative_weakness,
+unbacked_quantitative.
+
+Live failure 2026-05-02: sonnet-4-6 review produced F015 + F016 as
+substory_arc findings without title_quote (correctly — the criticism
+was about S1's redundant slide and S3's over-budget arc, not slide
+text). Validator rejected; revise loop blocked.
+
+New rule:
+  TITLE_QUOTE_REQUIRED_CLASSES = {register_drift, claim_evidence,
+                                  qa_softball}
+For these, title_quote required when slide_id present. For other
+slide-level finding classes, optional. Other slide-level fields
+(slide_position, slide_layout) still required regardless of class.
+
+5 new tests parameterized over the 4 optional-quote classes and the
+3 required-quote classes.
+
+New: Model selection documentation in SKILL.md
+
+Captures the empirical A/B comparison:
+- Sonnet 4.6 default justified — 17 findings vs Opus's 16; ~5x cost
+  ratio doesn't justify marginal unique catches.
+- Different blind spots: Sonnet catches detail (citations, verbatim
+  text); Opus catches methodology grounding + null hypotheses.
+- Fusion (--reviewer claude,codex) recommended for high-stakes decks;
+  Sonnet-alone for routine iteration.
+- Override examples for opus / haiku / fusion.
+
+Verification
+
+- 50 tests pass (45 in v0.5.2 + 5 new for class-conditional title_quote).
+- Re-validating the failed sonnet adversarial JSON from the live
+  A/B: 0 errors + 4 auto-correctable summary corrections (exit 2,
+  summary rewrite, revise loop proceeds).
+
+Refs:
+- predecessor tag: v0.5.2
+- next: revise-loop test on draft_2 using the now-validatable Sonnet
+  review output
