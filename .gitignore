@@ -45,3 +45,4 @@ Thumbs.db
 
 # Ruff cache
 .ruff_cache/
+.commit-message-*.txt
