@@ -7,11 +7,34 @@ allowed-tools: Bash, Read, Write
 # /beril-adversarial
 
 Run an adversarial review of the project, plan, paper draft, or
-presentation draft at `projects/<project_id>/` (for plan/project/paper)
-or at an absolute draft_dir path (for presentation, e.g.
-`projects/<id>/talks/draft_<N>/`). Harsher and more detail-oriented
-than `/berdl-review`. Supports multi-model fusion and consolidation
-across rounds for paper/project/plan; presentation is single-pass v1.
+presentation draft. Harsher and more detail-oriented than
+`/berdl-review`.
+
+## Mode quick-reference (for the agent — full matrix in SKILL.md)
+
+The four `--type` values have meaningfully different argument
+shapes, output paths, and supported flags. Single source of truth
+for per-mode behavior is the **Mode selection matrix in SKILL.md**.
+Quick reference for branching logic:
+
+| `--type` | Positional arg | Output | JSON schema | Modern v2 architecture? |
+|---|---|---|---|---|
+| `paper` (v0.6+) | `<draft_dir>` (per-draft directory `papers/draft_N/`) | `<draft_dir>/audit/adversarial_review.{md,json}` | `adversarial-review-paper.v2` | YES — single-pass; rejects `--consolidate` / `--reviewer codex` / `--reviewer claude,codex` |
+| `presentation` | `<draft_dir>` (`talks/draft_N/`) | `<draft_dir>/audit/adversarial_review.{md,json}` | `adversarial-review-presentation.v2` | YES — single-pass; same flag rejections |
+| `project` (default) | `<project_id>` | `projects/<id>/ADVERSARIAL_REVIEW_N.md` | _none — markdown only_ | NO — legacy; supports fusion, depth, consolidate, compliance critic, citation gate |
+| `plan` | `<project_id>` | `projects/<id>/ADVERSARIAL_PLAN_REVIEW_N.md` | _none_ | NO — legacy; same flags as project |
+
+**If the user passes a flag that's unsupported for the chosen mode**
+(e.g., `--consolidate` with `--type paper`), the shell script
+rejects with a diagnostic. Surface that diagnostic verbatim — don't
+try to silently fall back.
+
+**Argument-shape error to watch for:** if the user passes a
+`<project_id>` (e.g., `my_project`) with `--type paper` or
+`--type presentation`, the script will reject because those modes
+expect an absolute path to a `<draft_dir>`. Help the user form the
+correct path: `projects/<id>/papers/draft_N/` or
+`projects/<id>/talks/draft_N/`.
 
 ## Step 1 — Verify the package is installed
 
@@ -122,18 +145,31 @@ For `--type plan|project|paper`:
 2. Confirm it has YAML frontmatter (`grep -q '^---' <file>`).
 3. If validation fails, tell the user and stop.
 
-For `--type presentation`:
+For `--type paper` and `--type presentation` (both emit dual md+json
+output with v2 schemas — see SKILL.md mode matrix):
 
 1. Check that BOTH `<draft_dir>/audit/adversarial_review.md` and
    `<draft_dir>/audit/adversarial_review.json` exist and are
    non-empty.
-2. Validate the JSON parses and has `schema_version:
-   "adversarial-review-presentation.v1"`. The script does this
-   sanity check via python3 if available; verify the output mentions
-   `JSON OK: N slide-level findings, M deck-level findings`.
-3. If either file is missing or the JSON is invalid, tell the user
-   and stop. Re-running often resolves stochastic Write-tool
-   failures.
+2. Watch the validator output line in the bash output:
+   - `PASS: N {section|slide}-level finding(s), M {manuscript-wide|deck-level} finding(s) ...` — clean run; .json is consumer-safe.
+   - `PASS: ...` followed by `AUTO-CORRECTED:` block — validator
+     rewrote the LLM's miscounted summary block; sidecar
+     `<draft_dir>/audit/adversarial_review.original-summary.json`
+     preserves the original. The .json is still consumer-safe;
+     surface the auto-correction note to the user.
+   - `FAIL:` — non-correctable validation error (schema violation,
+     malformed JSON, missing required fields, narrative_weakness
+     invariant). The .md may still be useful for human review;
+     the .json is unsafe for downstream consumers. Tell the user;
+     suggest re-running (most failures are stochastic).
+3. JSON schema literal should be `adversarial-review-paper.v2`
+   (paper) or `adversarial-review-presentation.v2` (presentation).
+   Legacy `adversarial-review-presentation.v1` is accepted by the
+   validator with a deprecation warning for forensic reads of older
+   audit files only — new runs always emit v2.
+4. If either file is missing entirely, tell the user and stop.
+   Re-running often resolves stochastic Write-tool failures.
 
 ## Step 5 — Present summary
 

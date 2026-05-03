@@ -38,6 +38,63 @@ Claude Sonnet 4.6 (`claude-sonnet-4-6`). Iterative improvement
 ongoing — see `RELEASE_NOTES.md` for the v0.4.x → v0.6.x
 trajectory.
 
+## Two ways to invoke a review
+
+The skill exposes the same review functionality via two surfaces.
+Pick the right surface for your context:
+
+| Surface | When to use | How it's called | Where it lives |
+|---|---|---|---|
+| **`/beril-adversarial` slash command** | Interactive use inside Claude Code from a BERIL deployment. User-driven review of a paper, project, plan, or presentation. | `/beril-adversarial <target> --type X` (Claude Code agent then runs the shell script per the workflow below). | `commands/beril-adversarial.md` (this skill). |
+| **`beril-adversarial review` CLI subcommand** | Programmatic invocation from another skill's orchestrator (e.g., `paper_writer.sh`, `assemble.sh`). Scripted workflows. CI/CD. | `beril-adversarial review <target> --type X` (Python wrapper that delegates to the same shell script). | `src/beril_adversarial/commands/review.py`; installed alongside `install-skill` and `configure`. |
+
+Both surfaces dispatch to the same `tools/adversarial_review.sh`
+under the hood — single source of truth. Same exit codes, same
+output paths, same JSON schema. The slash command adds Claude-Code
+agent procedural steps (read summary, present to user, suggest
+follow-ups); the CLI subcommand is a thin wrapper that propagates
+exit codes for downstream scripts to act on.
+
+**For end users in Claude Code:** use the slash command.
+**For skill-to-skill integration:** use the CLI subcommand. See
+`CONTRACT.md` for the full programmatic interop surface.
+
+## Mode selection — one matrix, four modes
+
+The `--type` flag picks the review mode. Each mode has a different
+input shape, output path, and supported flag set. **This table is
+the single source of truth for per-mode behavior;** the slash
+command, the CLI subcommand, and `CONTRACT.md` all reference it
+rather than re-stating per-mode details.
+
+| Mode | Use case | Positional argument | Required inputs | Output paths | Schema | Auto-correction | `--consolidate` | `--reviewer codex` / `claude,codex` (fusion) | `--depth quick\|deep` | Compliance critic + citation gate |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **`--type paper`** (v0.6+) | Adversarial review of a paper-writer v0.6+ per-draft directory. Heavy audit pass; complements paper-writer's lighter `fallback_reviewer.v1.md`. | `<draft_dir>` — absolute path to `papers/draft_N/`. | `manuscript.md`, `00_throughline.md`, `references.md`, `citation_map.md`, `<project>/REPORT.md`. Optional: `reframing_log.md`, `methods_provenance.md`, `figures_inventory.md`, `tables_inventory.md`. | `<draft_dir>/audit/adversarial_review.{md,json}` | `adversarial-review-paper.v2` | ✓ summary count auto-correction (LLM arithmetic backstop) | ✗ rejected (single-pass v1) | ✗ rejected (single-pass v1) | ✗ ignored (single depth v1) | ✗ N/A |
+| **`--type presentation`** (v0.4+; v2 schema since v0.5.0) | Adversarial review of a presentation-maker draft. Consumed by presentation-maker's review-rewrite loop. | `<draft_dir>` — absolute path to `talks/draft_N/`. | `slide_spec.json`, `00_throughline.md`, `02_substories.md`, `03_slides/qa_anticipated.json`, `<project>/REPORT.md`. Auto-detects v0.3.0 (top-level) vs v0.3.1+ zone layout (`working/`). | `<draft_dir>/audit/adversarial_review.{md,json}` | `adversarial-review-presentation.v2` (legacy v1 accepted by validator with deprecation warning for forensics only) | ✓ summary count auto-correction | ✗ rejected (single-pass v1) | ✗ rejected (single-pass v1) | ✗ ignored (single depth v1) | ✗ N/A |
+| **`--type project`** (default; legacy mode) | Heavyweight project-level adversarial review of a BERDL project. Includes statistical-rigor checks, hypothesis vetting, biological-claim WebSearch verification. | `<project_id>` — directory name under `projects/`. Auto-detected if cwd is inside `projects/<id>/`. | All canonical artifacts: `README`, `RESEARCH_PLAN.md`, `REPORT.md`, prior `REVIEW_*.md`, `notebooks/`, `figures/`, `references.md`. | `projects/<id>/ADVERSARIAL_REVIEW_N.md` (auto-numbered, single markdown file) | _none — markdown only_ | _N/A — no JSON to auto-correct_ | ✓ supported (synthesizes numbered reviews into `ADVERSARIAL_REVIEW.md`) | ✓ supported | ✓ supported (`quick` ~1-2m / `standard` ~5-10m / `deep` ~15-25m) | ✓ enabled by default; `--no-critic` / `--no-verify-citations` to opt out |
+| **`--type plan`** (legacy mode) | Adversarial review of a research plan **before** data collection. Sanity-check the design before investing analysis time. | `<project_id>` — same shape as `--type project`. | `RESEARCH_PLAN.md`, `README.md`, `references.md`. | `projects/<id>/ADVERSARIAL_PLAN_REVIEW_N.md` (auto-numbered) | _none — markdown only_ | _N/A_ | ✓ supported (synthesizes into `ADVERSARIAL_PLAN_REVIEW.md`) | ✓ supported | ✓ supported | ✓ enabled by default |
+
+**Reading the matrix:**
+
+- **Modes that emit JSON contracts** (paper, presentation): single-
+  pass review, dual md+json output, downstream consumer-loops can
+  parse the JSON. Single-array `findings[]` schema (paper.v2 +
+  presentation.v2). Validator auto-corrects summary count
+  mismatches. No fusion / consolidation / depth modes — those
+  belong to the older project/plan modes.
+- **Modes that emit markdown only** (project, plan): legacy
+  reviewer architecture from v0.1-v0.3. Heavyweight workflow with
+  fusion (`--reviewer claude,codex`), depth control, compliance
+  critic, citation verification gate, multi-round consolidation.
+  No JSON contract; output is human-readable only.
+
+**Why the split:** v0.4+ added `--type presentation` and v0.6+
+added the new-architecture `--type paper`, both with JSON contracts
+to enable downstream review-rewrite loops in their respective
+consumer skills. Project/plan modes remain on the legacy
+architecture because no consumer-loop is planned for them — they're
+human-driven review tools, not pipelines.
+
 ## Slash commands
 
 ### `/beril-adversarial` — run a review
@@ -95,37 +152,7 @@ trajectory.
 - `--consolidate` — skip review; synthesize all numbered reviews of
   matching `--type` into a canonical file with revision history.
 
-**Defaults by type:**
-
-- `plan` — reads RESEARCH_PLAN, README, references.md; writes
-  `ADVERSARIAL_PLAN_REVIEW_N.md` at project root.
-- `project` (default) — reads all canonical artifacts (README,
-  RESEARCH_PLAN, REPORT, prior REVIEW_*.md, notebooks, figures,
-  references); writes `ADVERSARIAL_REVIEW_N.md` at project root.
-- `paper` (v0.6.0+) — takes `<draft_dir>` as positional argument
-  (paper-writer v0.6+ per-draft directory, e.g.
-  `projects/<id>/papers/draft_N/`). Reads
-  `<draft_dir>/manuscript.md`, `00_throughline.md`, `references.md`,
-  `citation_map.md`, `reframing_log.md` (optional),
-  `methods_provenance.md` (optional), plus project's `REPORT.md` and
-  `RESEARCH_PLAN.md`. Writes
-  `<draft_dir>/audit/adversarial_review.md` (human-readable) +
-  `<draft_dir>/audit/adversarial_review.json` (machine-readable;
-  schema `adversarial-review-paper.v2`). Single-pass; skips
-  `--reviewer claude,codex` fusion and `--consolidate`. Legacy
-  flat-file `papers/draft{N}.md` layout is rejected with a
-  migration message — pin v0.5.3 if you need the legacy path.
-- `presentation` — reads `<draft_dir>/slide_spec.json`,
-  `00_throughline.md`, `02_substories.md`,
-  `03_slides/qa_anticipated.json`, project's `REPORT.md` and
-  `RESEARCH_PLAN.md`. Writes `<draft_dir>/audit/adversarial_review.md`
-  (human-readable) + `<draft_dir>/audit/adversarial_review.json`
-  (machine-readable; consumer contract).
-  Single-pass v1: skips `--reviewer claude,codex` fusion, depth
-  variants, `--consolidate`, the compliance critic, and citation
-  verification. Tools granted to the reviewer subprocess are narrowed
-  to `Read, Write, Grep, Glob` (no WebSearch — would invite citation
-  fabrication on a deck which has no canonical bibliography).
+**Per-mode defaults:** see the [Mode selection matrix](#mode-selection--one-matrix-four-modes) above. Don't duplicate the matrix here.
 
 **Tools granted to the reviewer subprocess:**
 `Read, Write, Bash, Grep, Glob, WebSearch, Agent, ToolSearch`. Richer

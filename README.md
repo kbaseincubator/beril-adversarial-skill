@@ -42,6 +42,133 @@ No breaking changes to existing `--type plan` or `--type project`
 modes. `--type paper` did break in v0.6.0 (per-draft layout required;
 flat-file rejected with migration message).
 
+## Quick start
+
+There are **two ways to invoke a review** — pick the one that fits
+your context. Both run the same shell script under the hood; same
+exit codes, same output paths, same JSON schema.
+
+| Surface | Use this when... |
+|---|---|
+| **`/beril-adversarial` slash command** in Claude Code (BERIL deployment) | You're an end-user reviewing a paper, deck, or project interactively. Claude Code agent reads the output, summarizes the findings to you, and suggests follow-ups. |
+| **`beril-adversarial review` Python CLI subcommand** | You're another skill calling adversarial programmatically. paper_writer.sh, presentation-maker's revise loop, scripted workflows, CI/CD. Exit codes propagate so your script can branch on them. |
+
+The four review modes (`--type project|paper|presentation|plan`)
+are documented in detail in
+[`SKILL.md` → Mode selection matrix](src/beril_adversarial/skill/SKILL.md#mode-selection--one-matrix-four-modes)
+— the single source of truth for per-mode inputs, outputs, schemas,
+and supported flags. Don't memorize them; reference the matrix.
+
+### Example 1 — Review a paper draft (interactive, slash command)
+
+You just shipped `papers/draft_5/manuscript.md` from paper-writer
+and want a heavy adversarial audit before submission. From inside
+Claude Code in your BERIL deployment:
+
+```
+/beril-adversarial /Users/you/projects/my_project/papers/draft_5 --type paper
+```
+
+What happens:
+1. The slash-command agent runs the shell script for `--type paper`.
+2. Reviewer reads `manuscript.md` + `00_throughline.md` + `references.md` + `citation_map.md` + `<project>/REPORT.md` (+ optional `reframing_log.md`, `methods_provenance.md`).
+3. Writes `papers/draft_5/audit/adversarial_review.md` (human-readable) + `papers/draft_5/audit/adversarial_review.json` (`adversarial-review-paper.v2` schema).
+4. Validator auto-corrects summary count mismatches if the LLM miscounted (sidecar preserves the original for forensics).
+5. The agent reads the .md, summarizes findings to you, surfaces P0s, suggests follow-ups.
+
+Expected validator output line:
+```
+PASS: 9 section-level finding(s), 5 manuscript-wide finding(s) (8 P0, 5 P1, 0 P2, 1 info)
+```
+
+Or if auto-correction fired:
+```
+PASS: 9 section-level finding(s), 5 manuscript-wide finding(s) (8 P0, 5 P1, 0 P2, 1 info)
+================================================================
+AUTO-CORRECTED: summary count mismatches in the LLM's output
+================================================================
+  - summary.by_severity['P0']=6 but actual count = 8
+  ...
+================================================================
+```
+
+The `.json` is consumer-safe in either case. P0 findings are
+typically paper-killing issues (fabricated numbers, broken figure
+links, abstract-body mismatch, silent REPORT drift). The Class 7
+narrative_weakness "info" finding is the killshot — the single
+sharpest objection a peer reviewer would write.
+
+### Example 2 — Review a presentation draft (programmatic, from another skill)
+
+You're inside `beril-presentation-maker`'s `revise_loop.py`. After
+`merge_and_assemble` produces a deck, you want to invoke the
+adversarial reviewer and consume its JSON to drive a revise pass:
+
+```bash
+# From paper-writer / presentation-maker / any other shell:
+beril-adversarial review \
+    "$draft_dir" \
+    --type presentation
+EXIT=$?
+case $EXIT in
+  0|2)  # PASS or PASS-with-auto-correction (advisory) — JSON is consumer-safe
+        json="$draft_dir/audit/adversarial_review.json"
+        # Parse it, route findings by fix_target to revise prompts...
+        ;;
+  1)    # FAIL — non-correctable (schema violation, malformed JSON, etc.)
+        echo "Reviewer produced unsafe JSON; re-running once" >&2
+        # Optionally re-run; manual escalation if persistent
+        ;;
+  3)    # Config error (claude CLI missing, prompt missing)
+        echo "beril-adversarial not properly installed" >&2
+        exit $EXIT
+        ;;
+esac
+```
+
+What happens:
+1. CLI subcommand resolves the shell script via `BERIL_ROOT` discovery (or the `--beril-root` flag if you pass one), then invokes it.
+2. Reviewer reads the standard presentation-maker draft inputs (auto-detects v0.3.0 top-level vs v0.3.1+ zone layout — `working/` etc.).
+3. Writes dual md+json output to `<draft_dir>/audit/`.
+4. Same auto-correction backstop, same exit-code semantics as the slash command.
+5. Your revise loop parses the JSON's `findings[]` array; routes each finding by `fix_target` to the appropriate revise prompt; re-runs the reviewer after the revise pass.
+
+See `CONTRACT.md` for the durable interop surface (CLI signature,
+input expectations, output paths, schema family, auto-correction
+behavior, fallback-reviewer coordination).
+
+### Example 3 — Re-run after fixing P0s
+
+After acting on the findings from Example 1 or 2, re-run the same
+command. Output overwrites the previous `audit/` (no auto-numbering;
+the reviewer treats each invocation as a fresh review). To preserve
+a prior review, rename the audit directory first:
+
+```bash
+# Preserve the prior review for comparison
+mv papers/draft_5/audit papers/draft_5/audit-prev
+
+# Re-run
+/beril-adversarial /Users/you/projects/my_project/papers/draft_5 --type paper
+# OR via CLI:
+beril-adversarial review /Users/you/projects/my_project/papers/draft_5 --type paper
+
+# Diff the findings (manual eyeball or scripted)
+diff papers/draft_5/audit-prev/adversarial_review.md papers/draft_5/audit/adversarial_review.md
+```
+
+Iteration is owned by you (or by your downstream consumer's
+review-rewrite loop). The reviewer itself is single-pass per
+invocation — no built-in carryover or additive review across runs
+(that's a planned v0.7+ feature).
+
+### Where to go next
+
+- **`SKILL.md`** — full slash-command syntax + mode matrix + Claude Code agent workflow.
+- **`CONTRACT.md`** — the durable interop surface for skill-to-skill integration.
+- **`SCHEMA_V2_DECISIONS.md`** + **`SCHEMA_V2_PAPER_DECISIONS.md`** — schema design rationale (read these if you're consuming the JSON output).
+- **`RELEASE_NOTES.md`** — full v0.4.x → v0.6.x changelog with migration notes.
+
 ## Install
 
 ```bash

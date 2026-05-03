@@ -183,6 +183,204 @@ explicitly NOT a thing — paper schema launched directly at v2.
 
 ---
 
+## Validator ownership and shared-tool semantics
+
+`tools/validate_presentation_review.py` (filename retained from
+v0.5.x; handles both presentation v1+v2 and paper.v2 schemas as of
+v0.6.0) is **owned by beril-adversarial-skill**. Both the
+presentation-maker and paper-writer review-rewrite loops consume
+its output (the validated/auto-corrected JSON) but should NOT
+import or vendor it.
+
+Why this matters:
+- The validator implements the auto-correction behavior described
+  above. Bypassing it means consumers see the LLM's miscounted
+  summary block.
+- Any schema additions (new classes, new optional fields) land
+  here first. Consumers that re-implement validation will drift.
+- The validator file is shipped inside this skill's wheel
+  (`src/beril_adversarial/skill/tools/`) and deployed via
+  `beril-adversarial install-skill <BERIL>`. Consumers should
+  invoke `beril-adversarial review` (which runs the validator
+  internally) and rely on its exit code, not call the validator
+  directly.
+
+If a consumer needs to re-validate a stored audit JSON
+out-of-band, they MAY call the validator script directly via
+`python3 <BERIL>/.claude/skills/beril-adversarial/tools/validate_presentation_review.py <path>`,
+but this is a debugging convenience, not a contract surface.
+Schema bumps may rename or relocate the script.
+
+---
+
+## Workflow example — paper-writer's perspective
+
+The intended call flow when paper-writer wants a heavy adversarial
+audit pass after assembling a draft. paper-writer's lighter
+in-loop reviewer (`fallback_reviewer.v1.md`) keeps running per
+drafting iteration; the canonical reviewer fires when paper-writer
+wants the deeper audit (typically end of draft, before submission,
+or before user review).
+
+```bash
+# Inside paper_writer.sh, after manuscript.md is assembled:
+draft_dir="$PROJECT_DIR/papers/draft_$N"
+
+# Invoke canonical reviewer via the CLI subcommand. Single source
+# of truth; no need to know the deep filesystem path to the shell
+# script.
+beril-adversarial review "$draft_dir" --type paper
+EXIT=$?
+
+# Per-exit-code branching:
+case $EXIT in
+  0)
+    # PASS — clean validation. JSON is consumer-safe.
+    json="$draft_dir/audit/adversarial_review.json"
+    md="$draft_dir/audit/adversarial_review.md"
+    # Surface the .md to the user; route P0 findings from the JSON
+    # to the planned v0.7+ review-rewrite loop.
+    ;;
+  2)
+    # PASS-with-advisory: auto-correction or warnings fired.
+    # The .json is still consumer-safe (validator rewrote the
+    # summary block from the findings array). Sidecar at
+    # <name>.original-summary.json preserves the LLM's miscount
+    # for forensics. Treat the same as exit 0 for downstream
+    # consumption; surface the auto-correction note to the user
+    # if they want to debug LLM behavior.
+    ;;
+  1)
+    # FAIL: non-correctable validation error. Most common cause
+    # is unescaped " inside a JSON string field (per memory
+    # feedback_llm_json_unfixable_in_parser.md). Re-running often
+    # resolves it. The .md may still be useful for human review;
+    # the .json is unsafe for downstream parsing.
+    echo "Adversarial reviewer produced unsafe JSON; re-running" >&2
+    beril-adversarial review "$draft_dir" --type paper
+    EXIT=$?
+    if [[ $EXIT -ne 0 && $EXIT -ne 2 ]]; then
+      echo "Persistent failure; manual escalation needed" >&2
+      # Fall back to fallback_reviewer.v1.md if you still need a
+      # review for this drafting cycle.
+    fi
+    ;;
+  3)
+    # Config error: claude CLI missing, prompt missing, etc.
+    # User must fix install. Don't retry.
+    exit $EXIT
+    ;;
+esac
+```
+
+**On the v0.7+ review-rewrite loop (planned):** when paper-writer
+adds a loop that consumes the JSON to drive revise prompts, the
+intended pattern is:
+
+```python
+import json
+findings = json.load(open(f"{draft_dir}/audit/adversarial_review.json"))["findings"]
+for f in findings:
+    if f["severity"] == "P0":
+        # Route by fix_target field. Each value names a paper-writer
+        # prompt: results.v1.md, methods.v1.md, abstract.v1.md, etc.
+        # See SCHEMA_V2_PAPER_DECISIONS.md §"fix_target values".
+        invoke_revise_prompt(
+            target_prompt=f["fix_target"],
+            section=f.get("section"),  # absent for manuscript-wide findings
+            line_range=f.get("line_range"),
+            paragraph_quote=f.get("paragraph_quote"),
+            issue=f["issue"],
+            fix_hint=f["fix_hint"],
+        )
+# After the revise pass, re-run the reviewer to measure improvement.
+```
+
+**Coordinating with `fallback_reviewer.v1.md`:** the fallback
+reviewer is intentionally lighter scope (3 detection classes vs
+canonical's 10). Both modes can coexist:
+- Fallback for fast in-loop iteration during drafting (cheap,
+  narrow).
+- Canonical for thorough audit passes (full 10 classes, dual
+  output, JSON for consumer-loop use).
+
+paper-writer team picks the default. Both are valid.
+
+---
+
+## Workflow example — presentation-maker's perspective
+
+The intended call flow for presentation-maker's `revise_loop.py`
+after `merge_and_assemble` produces a deck:
+
+```python
+import json
+import subprocess
+import sys
+
+def adversarial_review(draft_dir):
+    """Invoke beril-adversarial review on a presentation draft.
+    Returns parsed JSON if consumer-safe; raises if not."""
+    result = subprocess.run(
+        ["beril-adversarial", "review", str(draft_dir),
+         "--type", "presentation"],
+        capture_output=True, text=True,
+    )
+    sys.stderr.write(result.stderr)  # surface validator output
+    sys.stdout.write(result.stdout)
+
+    if result.returncode in (0, 2):
+        # PASS or PASS-with-advisory; .json is consumer-safe
+        json_path = draft_dir / "audit" / "adversarial_review.json"
+        return json.load(open(json_path))
+    elif result.returncode == 1:
+        # FAIL — non-correctable; one retry, then escalate
+        raise RuntimeError(
+            "Adversarial reviewer produced unsafe JSON; "
+            "see stderr for details. Re-run or escalate."
+        )
+    else:  # exit 3 — config error
+        raise RuntimeError("beril-adversarial not installed properly")
+
+# In revise_loop.py main flow:
+review = adversarial_review(draft_dir)
+
+# Walk findings and route revise prompts per-finding
+for finding in review["findings"]:
+    if finding["severity"] != "P0":
+        continue  # default policy: P0 → revise; P1+P2+info → next_actions
+    target = finding["fix_target"]
+    if target == "slide_compose.v1.md":
+        invoke_revise_slide(
+            slide_id=finding["slide_id"],
+            issue=finding["issue"],
+            fix_hint=finding["fix_hint"],
+        )
+    elif target == "qa_anticipated.v1.md":
+        invoke_revise_qa(...)
+    elif target == "00_throughline.md":
+        # Throughline changes cascade; surface for user confirmation
+        # rather than auto-revise.
+        next_actions.append(finding)
+    # ... etc
+```
+
+**Layout-detection awareness:** presentation-maker v0.3.1+ uses a
+4-zone draft directory (`deliverable/`, `narrative/`, `working/`,
+`audit/`). The orchestrator auto-detects this layout (added v0.5.2)
+and reads `slide_spec.json` from `working/` if present, else from
+the top level (legacy v0.3.0). `revise_loop.py` doesn't need to
+know which layout — the reviewer handles both transparently.
+
+**The audit/ directory is shared:** both presentation-maker (which
+may write its own audit artifacts) and beril-adversarial (which
+writes `adversarial_review.{md,json}`) co-exist in
+`<draft_dir>/audit/`. Filename collision is avoided by the
+canonical names; if presentation-maker adds new audit artifacts in
+the future, prefix them clearly to keep the namespace clean.
+
+---
+
 ## Cross-skill smoke test responsibility
 
 Each consumer skill SHOULD have a smoke test that verifies its output

@@ -1,7 +1,34 @@
 # beril-adversarial-skill — package layout + CLI structure
 
-**Date:** 2026-04-24, last updated 2026-04-25.
-**Status:** v0.1 ready for repo init pending live-test signoff.
+> **⚠️ HISTORICAL — original v0.1 architecture spec.** This document
+> captures the design intent for the initial v0.1.0 release. The
+> structural decisions (pipx-installable Python package + shipped
+> Claude Code skill, shell-script orchestrator invoking `claude`/`codex`,
+> versioned system prompts, BERIL_ROOT discovery) are still load-bearing
+> in v0.6.x. Specific section content has drifted as v0.4 → v0.6 added
+> the JSON schema family, validator + auto-correction, dual md+json
+> output, and the `beril-adversarial review` CLI subcommand.
+>
+> **For current authoritative documentation, see:**
+> - `README.md` — install + usage + quick-start tutorial
+> - `src/beril_adversarial/skill/SKILL.md` — slash command + mode
+>   selection matrix + agent workflow
+> - `CONTRACT.md` — cross-skill interop surface (the durable
+>   contract for paper-writer and presentation-maker)
+> - `SCHEMA_V2_DECISIONS.md` + `SCHEMA_V2_PAPER_DECISIONS.md` —
+>   schema design rationale
+> - `RELEASE_NOTES.md` — v0.4 → v0.6 trajectory with migration notes
+>
+> This file is preserved as historical context for the original
+> v0.1 design. The "Deliverables this document blocks" section
+> below is satisfied (we shipped v0.1 → v0.6.2). Per-section content
+> may be stale — verify against current code or the docs above
+> before treating as fact.
+
+**Date:** 2026-04-24, last updated 2026-04-25 (subsequent updates
+captured in `RELEASE_NOTES.md` per release).
+**Status:** Original — v0.1 ready for repo init. Current shipped
+state: v0.6.2 (see `RELEASE_NOTES.md`).
 
 This document specifies the shape of `ArkinLaboratory/beril-adversarial-skill`.
 The skill is modelled on BERIL's `/berdl-review` for the core review-runs-claude
