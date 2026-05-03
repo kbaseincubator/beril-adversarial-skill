@@ -41,7 +41,7 @@ SKILL_DIR_SRC = (
     / "beril_adversarial"
     / "skill"
 )
-PROMPT_PATH = SKILL_DIR_SRC / "prompts" / "adversarial_presentation.v2.md"
+PROMPT_PATH = SKILL_DIR_SRC / "prompts" / "adversarial_presentation.v3.md"
 PROMPT_V1_DEPRECATION_STUB = SKILL_DIR_SRC / "prompts" / "adversarial_presentation.v1.md"
 ORCHESTRATOR_SCRIPT = SKILL_DIR_SRC / "tools" / "adversarial_review.sh"
 SKILL_MD = SKILL_DIR_SRC / "SKILL.md"
@@ -56,7 +56,7 @@ SLASH_COMMAND_MD = SKILL_DIR_SRC / "commands" / "beril-adversarial.md"
 def test_presentation_prompt_file_exists():
     """The system prompt file must ship in the source tree."""
     assert PROMPT_PATH.is_file(), (
-        f"adversarial_presentation.v2.md not found at {PROMPT_PATH}"
+        f"adversarial_presentation.v3.md not found at {PROMPT_PATH}"
     )
 
 
@@ -80,9 +80,11 @@ def test_v1_prompt_either_absent_or_deprecation_stub():
     )
 
 
-def test_presentation_prompt_names_all_seven_detection_classes():
-    """The prompt must explicitly enumerate all 7 detection classes
-    from SPEC §4. Skipping a class means the reviewer won't run it."""
+def test_presentation_prompt_names_all_eight_detection_classes():
+    """The prompt must explicitly enumerate all 8 v3 detection classes.
+    v3 added citation_reality (Class 6) and renamed Class 7 narrative
+    weakness -> Class 8 central_objection. Skipping a class means the
+    reviewer won't run it."""
     text = PROMPT_PATH.read_text(encoding="utf-8")
     required_class_markers = (
         "Class 1: throughline integrity",
@@ -90,8 +92,9 @@ def test_presentation_prompt_names_all_seven_detection_classes():
         "Class 3: tier-language register",
         "Class 4: Q&A anti-strawman check",
         "Class 5: substory→slide mapping coherence",
-        "Class 6: missing slides / coverage gaps",
-        "Class 7: the deck's biggest narrative weakness",
+        "Class 6: citation reality",
+        "Class 7: missing slides / coverage gaps",
+        "Class 8: central objection",
     )
     for marker in required_class_markers:
         assert marker in text, f"prompt missing detection class marker: {marker!r}"
@@ -113,7 +116,7 @@ def test_presentation_prompt_pins_schema_version():
     """The JSON schema_version must be the SPEC-mandated literal —
     consumers parse by exact match."""
     text = PROMPT_PATH.read_text(encoding="utf-8")
-    assert "adversarial-review-presentation.v2" in text, (
+    assert "adversarial-review-presentation.v3" in text, (
         "prompt does not pin schema_version literal "
         "'adversarial-review-presentation.v2'"
     )
@@ -125,7 +128,7 @@ def test_presentation_prompt_lists_severity_grades():
     for grade in ("P0", "P1", "P2"):
         assert grade in text, f"prompt missing severity grade {grade!r}"
     assert "info" in text, (
-        "prompt does not name the 'info' severity (Class 7 narrative_weakness)"
+        "prompt does not name the 'info' severity (Class 8 central_objection in v3)"
     )
 
 
@@ -170,7 +173,7 @@ def test_presentation_prompt_has_worked_examples_for_underfire_classes():
         "## Worked example: Q&A softball detection (Class 4)",
         "## Worked example: substory-arc burial detection (Class 5)",
         "## Worked example: throughline-integrity (filler punchline) detection (Class 1)",
-        "## Worked example: narrative weakness (Class 7) — the killshot",
+        "## Worked example: central objection (Class 8) — the peer-reviewer killshot",
     ):
         assert heading in text, f"prompt missing worked example: {heading!r}"
 
@@ -500,8 +503,8 @@ def test_install_skill_includes_presentation_prompt():
     """Verify that the prompts/ directory shipped via install-skill
     contains the presentation prompt. We probe at the source-tree
     level since that's where install-skill copies from."""
-    assert (SKILL_DIR_SRC / "prompts" / "adversarial_presentation.v2.md").is_file(), (
-        "presentation v2 prompt not in shipped prompts/ — install-skill "
+    assert (SKILL_DIR_SRC / "prompts" / "adversarial_presentation.v3.md").is_file(), (
+        "presentation v3 prompt not in shipped prompts/ — install-skill "
         "will not deploy it"
     )
 

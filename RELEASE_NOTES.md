@@ -2,6 +2,70 @@
 
 ---
 
+## v0.7.0.1 — 2026-05-03 (docs-only — project & draft discovery for BERIL hub workflow)
+
+Doc-only fast follow to v0.7.0 to smooth the project/draft discovery
+flow for May 7 stress-test participants. v0.7.0 hub install surfaced
+that users on the BERIL hub typically stay at `BERIL_ROOT` (they don't
+`cd` into a specific project), so the existing cwd-based project
+detection didn't help — the agent had no documented way to figure out
+which project they were working on.
+
+### Added — SKILL.md
+
+- **Step 1 (resolve project context) rewritten** as a 4-signal
+  resolution tree (in priority order): (a) explicit argument, (b) git
+  branch matching `projects/<id>` convention, (c) cwd inside
+  `projects/<id>/`, (d) ask the user with the project list. The branch
+  detection is the strongest signal on the hub.
+- **Step 2 (resolve draft) added** — for `--type paper|presentation`,
+  the agent now lists `papers/` or `talks/` and proposes the
+  highest-numbered `draft_N` as the default, confirming with the user
+  before invoking the review.
+- Steps 3-5 renumbered (was 2-4): invoke reviewer, verify completion,
+  guidance.
+
+### Added — README.md
+
+- **`## Project & draft discovery (BERIL hub workflow)`** subsection
+  before `## Install` — user-facing version of the same 4-signal
+  resolution tree, with copy-pasteable shell snippets and example
+  plain-English prompts the user can give Claude (`"What projects do
+  I have in BERIL?"`, `"Run adversarial review on the latest
+  presentation draft for <project>"`).
+- "Where to go next" section updated to point at `SCHEMA_V3_DECISIONS.md`
+  as current; v2 docs marked historical.
+
+### No code changes
+
+Schema, validator, orchestrator, CLI all unchanged from v0.7.0. The
+deployed skill files are byte-identical to v0.7.0 EXCEPT `SKILL.md`
+(which the in-hub Claude Code agent reads) and the source-repo
+`README.md` (which the user reads). Operator impact: re-run
+`pipx install --force` + `install-skill` to pick up the new SKILL.md;
+the in-hub agent then uses the new resolution tree on next invocation.
+
+### Operator impact
+
+```bash
+pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git
+beril-adversarial install-skill <BERIL_ROOT>
+```
+
+(or the wheel path if installing locally)
+
+The deployed skill tree gains the updated SKILL.md; everything else
+is byte-identical to v0.7.0.
+
+### Why this is v0.7.0.1 instead of v0.7.1
+
+v0.7.1 is reserved for the fusion (`--reviewer claude,codex`)
+implementation that was deferred from v0.7.0. v0.7.0.1 is a
+docs-only fast follow to v0.7.0; doesn't touch any code. Same
+versioning pattern as v0.6.5 (docs-only follow to v0.6.4).
+
+---
+
 ## v0.7.0 — 2026-05-03 (schema bundle: `central_objection` rename, `citation_reality` on presentation, `--output` honored)
 
 Three breaking changes bundled into one schema bump

@@ -172,15 +172,80 @@ the toolchain changes.
 
 When the user invokes `/beril-adversarial`:
 
-### Step 1 — Resolve project
+### Step 1 — Resolve project context
 
-1. Accept `<project_id>` from the argument, or detect from cwd if
-   inside `projects/{id}/`.
-2. Validate `projects/{project_id}/` exists.
-3. For `--type paper`: validate `projects/{project_id}/papers/` exists
-   and contains at least one `draft{N}.md`.
+This is the agent's most load-bearing inference step. On the BERIL hub,
+users may invoke the slash command from many starting points (just
+opened Claude Code, in the middle of a research workflow, after
+`/berdl_start`, etc.) and they often stay at BERIL_ROOT in cwd rather
+than `cd`-ing into a specific project. Walk this resolution tree IN
+ORDER and stop at the first match:
 
-### Step 2 — Invoke the reviewer
+**1a. Explicit argument.** If the user typed a target after the slash
+command (e.g., `/beril-adversarial review --type paper my_project_id`,
+or `/beril-adversarial review --type presentation /abs/path/to/draft_3/`),
+use it as-is. For `--type paper|plan|project`, the argument is a
+`<project_id>`; for `--type presentation`, it's a `<draft_dir>` (full
+path to `projects/<id>/talks/draft_N/`). Validate the path/id exists;
+ask the user to clarify if it doesn't.
+
+**1b. Git branch convention.** Run `git -C $BERIL_ROOT branch
+--show-current`. The hub uses a `projects/<id>` branch-naming
+convention — branch `projects/gene_function_ecological_agora` means the
+active research project is `gene_function_ecological_agora`. Strip the
+`projects/` prefix; that's the project_id. **Confirm with the user
+before acting:** "I see you're on branch `projects/<id>`. Run review
+against that project? [Y/n]". This is the strongest signal on the hub
+because users typically stay at BERIL_ROOT.
+
+**1c. cwd.** Run `pwd`. If the path is inside `projects/<id>/`, that
+`<id>` is the project_id. Common when the user `cd`'d into a project
+manually.
+
+**1d. Ask the user.** If 1a–1c didn't resolve, present the project list
+and ask:
+
+```bash
+ls $BERIL_ROOT/projects/        # all available project_ids
+```
+
+For projects that have a `beril.yaml` manifest, surface the project's
+status alongside the id. If the user just ran `/berdl_start`, reference
+the project list it already displayed rather than re-listing.
+
+After resolving project_id, validate `projects/<project_id>/` exists
+before proceeding.
+
+### Step 2 — Resolve draft (paper / presentation modes only)
+
+For `--type plan` and `--type project`, draft selection does not
+apply — skip to Step 3.
+
+**For `--type paper`:**
+
+- If the user passed an absolute or relative path to a specific
+  `papers/draft_N/` directory in Step 1a, use that.
+- Else: list paper drafts under the resolved project and pick a
+  default:
+
+  ```bash
+  ls $BERIL_ROOT/projects/<project_id>/papers/
+  ```
+
+  Pick the highest-numbered `draft_N` as the proposed default.
+  Confirm with the user before invoking the review: "Found drafts
+  `draft_1` through `draft_5`. Latest is `draft_5`. Review that, or
+  pick another? [Y/n/N=specific number]".
+
+**For `--type presentation`:**
+
+- Same logic as paper, but under `projects/<project_id>/talks/` instead
+  of `papers/`.
+
+The reviewer's `<draft_dir>` argument needs the absolute path:
+`$BERIL_ROOT/projects/<project_id>/talks/draft_<N>/` (or `papers/draft_<N>/`).
+
+### Step 3 — Invoke the reviewer
 
 Run the shipped shell script:
 
@@ -215,7 +280,7 @@ Run from `BERIL_ROOT` (the directory containing `projects/` and
 `.claude/`). The script auto-resolves BERIL_ROOT from its own install
 path if needed.
 
-### Step 3 — Verify completion
+### Step 4 — Verify completion
 
 After the script returns:
 
@@ -225,7 +290,7 @@ After the script returns:
 3. Print a brief summary: severity counts, biological claims checked,
    any prior-review issues addressed.
 
-### Step 4 — Guidance
+### Step 5 — Guidance
 
 Based on the review outcome:
 

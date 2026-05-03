@@ -165,9 +165,61 @@ invocation — no built-in carryover or additive review across runs
 ### Where to go next
 
 - **`SKILL.md`** — full slash-command syntax + mode matrix + Claude Code agent workflow.
-- **`CONTRACT.md`** — the durable interop surface for skill-to-skill integration.
-- **`SCHEMA_V2_DECISIONS.md`** + **`SCHEMA_V2_PAPER_DECISIONS.md`** — schema design rationale (read these if you're consuming the JSON output).
-- **`RELEASE_NOTES.md`** — full v0.4.x → v0.6.x changelog with migration notes.
+- **`CONTRACT.md`** — the durable interop surface for skill-to-skill integration. Read v0.7.0 migration section first if you're a consumer.
+- **`SCHEMA_V3_DECISIONS.md`** — current schema design rationale. **`SCHEMA_V2_DECISIONS.md`** + **`SCHEMA_V2_PAPER_DECISIONS.md`** — historical (v2 deprecated as of v0.7.0).
+- **`RELEASE_NOTES.md`** — full changelog with migration notes.
+
+## Project & draft discovery (BERIL hub workflow)
+
+When you invoke `/beril-adversarial review --type X` inside Claude
+Code on a BERIL deployment, the agent figures out which project + draft
+you mean from four signals, in order:
+
+1. **Explicit argument.** If you typed a target after the slash command
+   (e.g., `/beril-adversarial review --type paper my_project_id` or
+   `/beril-adversarial review --type presentation /abs/path/to/draft_3/`),
+   the agent uses it directly.
+
+2. **Git branch convention.** The hub uses `projects/<id>` as the
+   branch-naming convention (e.g., `projects/gene_function_ecological_agora`).
+   If your current branch matches that pattern, the agent infers the
+   project from it and confirms with you before running. This is the
+   most common path on the hub because users typically stay at
+   BERIL_ROOT.
+
+3. **cwd.** If you `cd`'d into `projects/<id>/` before invoking the
+   slash command, the agent picks `<id>` up from your working directory.
+
+4. **Ask you.** If none of the above resolve, the agent lists projects
+   (`ls projects/`) and asks you to pick. If you just ran `/berdl_start`,
+   the agent will reference the project list it already showed you.
+
+For `--type paper` and `--type presentation`, after resolving the
+project, the agent picks a draft:
+
+- If you supplied a full path to `papers/draft_N/` or `talks/draft_N/`
+  in step 1, that's the draft.
+- Otherwise the agent runs `ls papers/` (or `talks/`), proposes the
+  highest-numbered `draft_N` as the default, and asks you to confirm
+  or pick another.
+
+**Discoverability shortcuts you can use directly:**
+
+```bash
+# From your shell on the hub:
+ls $HOME/BERIL-research-observatory/projects/                    # list all projects
+ls $HOME/BERIL-research-observatory/projects/<id>/papers/        # list paper drafts
+ls $HOME/BERIL-research-observatory/projects/<id>/talks/         # list presentation drafts
+
+# Or just ask Claude:
+"What projects do I have in BERIL?"
+"What's the latest paper draft for <project>?"
+"Run adversarial review on the latest presentation draft for <project>"
+```
+
+The slash command is the front door, but plain English requests work
+too — the agent has shell access and follows the same resolution
+logic.
 
 ## Install
 
