@@ -49,7 +49,9 @@ Usage:
 
 from __future__ import annotations
 
+import io
 import json
+import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -237,18 +239,48 @@ SLIDE_LEVEL_REQUIRED_FIELDS = {
     "title_quote",
 }
 
-# Paper: section-level fields required when section is present.
-# paragraph_quote is class-conditional (mirror of v0.5.3 presentation
-# title_quote behavior — see PAPER_PARAGRAPH_QUOTE_REQUIRED_CLASSES).
+# Paper: section-level locus field required when a finding is
+# section-scoped. ONLY `section` is unconditionally required — see
+# PAPER_LINE_RANGE_REQUIRED_CLASSES for why `line_range` is NOT here.
+#
+# v0.7.1 fix: `line_range` was previously in this set, which made it
+# mandatory on EVERY section-scoped finding. But section/document-
+# scoped classes (section_arc, throughline, missing_section,
+# central_objection, abstract_body_mismatch) legitimately carry
+# `section` while having no single meaningful line range — a
+# narrative-arc critique of the whole Results section spans the
+# section, not a line span. The old rule deterministically rejected
+# correct findings and blocked the paper-writer review-rewrite
+# consumer. `line_range` is now class-conditional (see below),
+# mirroring the paragraph_quote / title_quote carve-out pattern.
 SECTION_LEVEL_REQUIRED_FIELDS = {
     "section",
-    "line_range",
 }
 
 # Paper: classes for which paragraph_quote is required (criticism
 # targets specific text). Mirror of presentation's title_quote rules
 # from v0.5.3.
 PAPER_PARAGRAPH_QUOTE_REQUIRED_CLASSES = {
+    "register_drift",
+    "claim_evidence",
+    "unbacked_quantitative",
+    "report_drift",
+}
+
+# Paper: classes for which `line_range` is required (the finding is
+# anchored to a specific line span — a quotable, line-locatable
+# critique). These are the same classes that require paragraph_quote:
+# a finding that critiques specific text both quotes it AND has a
+# line span. Section/document-scoped classes (section_arc,
+# throughline, missing_section, central_objection,
+# abstract_body_mismatch) and citation-scoped findings
+# (citation_reality) carry `section` but NOT `line_range` — there is
+# no single line range for a whole-section or whole-document critique.
+#
+# Defined as its own set (rather than aliasing
+# PAPER_PARAGRAPH_QUOTE_REQUIRED_CLASSES) so the two can diverge
+# later without surprise; today they happen to be identical.
+PAPER_LINE_RANGE_REQUIRED_CLASSES = {
     "register_drift",
     "claim_evidence",
     "unbacked_quantitative",
@@ -518,14 +550,27 @@ def validate(
         if require_slide_fields:
             cls_for_check = f.get("class")
             if is_paper:
-                # Paper v2: section-level required fields are SECTION_LEVEL_*
-                # (section + line_range), plus paragraph_quote which is
-                # class-conditional (mirror of presentation's title_quote
-                # behavior from v0.5.3).
+                # Paper v2/v3: a section-scoped finding always carries
+                # `section`. `line_range` and `paragraph_quote` are
+                # BOTH class-conditional — required only for the
+                # line-specific text-critique classes (register_drift,
+                # claim_evidence, unbacked_quantitative, report_drift),
+                # optional for section/document-scoped classes
+                # (section_arc, throughline, missing_section,
+                # central_objection, abstract_body_mismatch) and
+                # citation-scoped findings (citation_reality).
+                #
+                # v0.7.1 fix: `line_range` used to be unconditionally
+                # required via SECTION_LEVEL_REQUIRED_FIELDS, which
+                # deterministically rejected correct section-scoped
+                # findings (e.g. a section_arc critique of the whole
+                # Results section). Now it follows the same
+                # class-conditional pattern as paragraph_quote.
+                required = set(SECTION_LEVEL_REQUIRED_FIELDS)  # {"section"}
+                if cls_for_check in PAPER_LINE_RANGE_REQUIRED_CLASSES:
+                    required = required | {"line_range"}
                 if cls_for_check in PAPER_PARAGRAPH_QUOTE_REQUIRED_CLASSES:
-                    required = SECTION_LEVEL_REQUIRED_FIELDS | {"paragraph_quote"}
-                else:
-                    required = SECTION_LEVEL_REQUIRED_FIELDS
+                    required = required | {"paragraph_quote"}
                 missing_section_fields = required - f.keys()
                 if missing_section_fields:
                     errors.append(
@@ -808,7 +853,38 @@ def validate(
     return errors, summary_corrections, warnings, summary_stats
 
 
+def _harden_stderr() -> None:
+    """Restore stderr to blocking mode if it was inherited non-blocking.
+
+    v0.7.1 fix: on macOS, the validator can inherit a NON-BLOCKING
+    stderr file descriptor from an upstream process (observed: a Node
+    `claude` process leaking O_NONBLOCK on fd 2). Writing a diagnostic
+    line to a non-blocking fd whose buffer is full raises
+    BlockingIOError [Errno 35 EAGAIN] — which, uncaught, crashes the
+    validator mid-print even when validation itself SUCCEEDED. The
+    orchestrator then misreads the non-zero exit as a validation
+    failure.
+
+    Restoring blocking mode on fd 2 is the root-cause fix: it makes
+    every subsequent stderr write wait for buffer space instead of
+    raising EAGAIN. Guarded — if stderr has no real fd (e.g., it's an
+    in-memory object under pytest capture) or set_blocking is
+    unsupported, this is a silent no-op and the validator proceeds.
+    """
+    try:
+        os.set_blocking(sys.stderr.fileno(), True)
+    except (OSError, ValueError, AttributeError, io.UnsupportedOperation):
+        # No real fd (e.g. stderr is an in-memory buffer under pytest
+        # capture), or the platform doesn't support set_blocking —
+        # harmless. The validator's logic is unaffected; in-memory
+        # buffers don't raise EAGAIN, so there is nothing to fix.
+        pass
+
+
 def main(argv: list[str]) -> int:
+    # Harden stderr against an inherited non-blocking fd (see above).
+    _harden_stderr()
+
     if len(argv) != 2:
         print(
             "Usage: validate_presentation_review.py <path/to/adversarial_review.json>",

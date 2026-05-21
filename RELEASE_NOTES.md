@@ -2,6 +2,111 @@
 
 ---
 
+## v0.7.0.5 — 2026-05-05 (HOTFIX — validator wrongly required line_range on section-scoped findings)
+
+**This is a code-change hotfix, NOT a docs-only release** (unlike
+v0.7.0.1–.4). Surfaced by the paper-writer team's Stage 7 holdout
+campaign — a deterministic, consumer-blocking validator bug.
+
+### Bug 1 (P0) — `line_range` wrongly required on section-scoped classes
+
+`validate_presentation_review.py` treated every section-scoped paper
+finding as needing BOTH `section` AND `line_range`
+(`SECTION_LEVEL_REQUIRED_FIELDS = {section, line_range}`). But
+section/document-scoped finding classes — `section_arc`,
+`throughline`, `missing_section`, `central_objection`,
+`abstract_body_mismatch`, and citation-scoped `citation_reality` —
+legitimately carry `section` while having NO single meaningful line
+range. A narrative-arc critique of the whole Results section spans
+the section, not a line span.
+
+The old rule deterministically rejected correct findings as
+"non-correctable," flagging the `adversarial_review.json` as unsafe
+for the paper-writer review-rewrite consumer. It hit the
+paper-writer team's Stage 7 holdouts repeatedly (e.g.
+`adp1_triple_essentiality` draft_1, finding F020, class
+`section_arc`). NOT a stochastic LLM-discipline failure — the
+"re-running often resolves it" guidance did not apply.
+
+**Fix:** `line_range` is now class-conditional, mirroring the
+existing `paragraph_quote` carve-out (v0.5.3 `title_quote` pattern).
+New `PAPER_LINE_RANGE_REQUIRED_CLASSES = {register_drift,
+claim_evidence, unbacked_quantitative, report_drift}` — the
+line-specific text-critique classes. `line_range` is required ONLY
+for those; `section` remains required whenever a section is named;
+`line_range` is OPTIONAL for the six section/document-scoped
+classes. The bug predates v0.7.0 (it was present since v0.6.0 when
+the paper schema launched) — applies to paper v2 and v3 equally.
+
+The v3 paper prompt's field-rules table updated to match (it
+previously documented `line_range` as "required IFF section
+present", which described the buggy behavior).
+
+### Bug 2 (P2) — validator crashed on BlockingIOError during stderr write
+
+On a different holdout (`metal_specificity`), the validator
+hard-crashed with `BlockingIOError: [Errno 35]` while writing a
+diagnostic line to stderr. The validation itself had SUCCEEDED; the
+crash happened during the success-message print. Root cause: the
+validator inherited a NON-BLOCKING stderr file descriptor from an
+upstream process (a Node `claude` process leaking O_NONBLOCK on
+fd 2 — environmental, macOS-specific). Writing to a non-blocking
+fd whose buffer is full raises EAGAIN.
+
+Compounding: after the crash (non-zero exit from the uncaught
+exception), the orchestrator misread the exit code and printed
+"JSON VALIDATION FAILED — non-correctable" even though validation
+had succeeded.
+
+**Fix:** `_harden_stderr()` at the start of `main()` restores fd 2
+to blocking mode via `os.set_blocking()`. Root-cause fix — covers
+all 25 stderr write sites in one line; subsequent writes wait for
+buffer space instead of raising EAGAIN. Guarded so it's a silent
+no-op when stderr has no real fd (e.g. pytest capture). Because the
+validator no longer crashes, it returns the correct exit code and
+the orchestrator no longer misreports — both halves of bug 2
+resolved by the root-cause fix.
+
+### Test coverage
+
+7 new tests (200 total, was 193):
+- `section_arc` / `throughline` / `missing_section` /
+  `abstract_body_mismatch` / `citation_reality` with `section` but
+  no `line_range` → pass.
+- `register_drift` with `section` but no `line_range` → still fails
+  (class-conditional, not a blanket drop).
+- `claim_evidence` with full locus → passes (positive control).
+- paper v2 `section_arc` without `line_range` → passes (fix applies
+  to v2 too).
+- `_harden_stderr` is safe under pytest capture (no real fd).
+
+End-to-end CLI confirmation: the exact F020 `section_arc` shape from
+the team's bug report now validates with exit 0.
+
+### Operator impact
+
+```bash
+pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git
+beril-adversarial install-skill <BERIL_ROOT>
+beril-adversarial --version    # 0.7.0.5
+```
+
+This release DOES change the deployed skill files (the validator
+and the paper v3 prompt). Re-install is required for the fix to
+take effect. Consumer skills (paper-writer's review-rewrite loop)
+benefit immediately — section-scoped findings are no longer
+rejected.
+
+### v0.7.1 punch-list note
+
+Deeper orchestrator robustness — distinguishing "validator crashed"
+from "validation failed" so a future crash isn't misreported as a
+data failure — is captured for v0.7.1. With the v0.7.0.5
+root-cause fix the symptom no longer appears, but the orchestrator
+should still treat a validator non-zero exit defensively.
+
+---
+
 ## v0.7.0.4 — 2026-05-05 (docs-only — cross-skill doc-consistency refactor)
 
 Docs-only refactor responding to presentation-maker team's pushback

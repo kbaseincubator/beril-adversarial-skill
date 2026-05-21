@@ -773,11 +773,17 @@ Schema (this is the consumer contract — `adversarial-review-paper.v3`):
 There is ONE `findings[]` array. ALL findings live in it. There is
 NO `deck_level_findings[]` field — emitting one will fail validation.
 
-- **Section-level findings** have `section` (and `line_range`,
-  `paragraph_quote`). Most findings are section-level.
-- **Manuscript-wide findings** OMIT `section` (and the other
-  section-level fields). The reviewer signals "this finding has no
-  single section locus" by leaving `section` out.
+- **Section-level findings** carry `section`. Line-specific
+  text-critique classes (`register_drift`, `claim_evidence`,
+  `unbacked_quantitative`, `report_drift`) ALSO carry `line_range`
+  and `paragraph_quote`. Section/document-scoped classes
+  (`section_arc`, `throughline`, `missing_section`,
+  `abstract_body_mismatch`, `citation_reality`) carry `section`
+  but NOT `line_range`/`paragraph_quote` — see the field-rules
+  table below. Most findings are section-level.
+- **Manuscript-wide findings** OMIT `section` entirely. The reviewer
+  signals "this finding has no single section locus" by leaving
+  `section` out.
   - `central_objection` is ALWAYS manuscript-wide (no section).
   - `missing_section` is ALWAYS manuscript-wide (about a section
     that isn't there).
@@ -819,17 +825,26 @@ NO `deck_level_findings[]` field — emitting one will fail validation.
 | `issue` | required | prose |
 | `fix_target` | required | prompt/layer name |
 | `fix_hint` | required | concrete fix |
-| `section` | optional | absence ⇒ manuscript-wide finding |
-| `line_range` | optional | required IFF section present (best-effort) |
-| `paragraph_quote` | optional | required IFF section present, EXCEPT for central_objection/missing_section/throughline/section_arc/abstract_body_mismatch/citation_reality where it's optional (those are structural, not text-specific) |
-| `citation_id` | optional | for citation_reality findings |
+| `section` | required for section-scoped findings; omit for manuscript-wide | absence ⇒ manuscript-wide finding |
+| `line_range` | class-conditional — required ONLY for `register_drift`, `claim_evidence`, `unbacked_quantitative`, `report_drift` (the line-specific text-critique classes) | OPTIONAL for `section_arc`, `throughline`, `missing_section`, `central_objection`, `abstract_body_mismatch`, `citation_reality` — a section/document-scoped critique has no single line span |
+| `paragraph_quote` | class-conditional — required ONLY for `register_drift`, `claim_evidence`, `unbacked_quantitative`, `report_drift` | optional for the same six structural classes as `line_range` (they critique structure, not specific text) |
+| `citation_id` | required for `citation_reality` findings | string identifier of the cited source |
 | `report_evidence` | required for P0/P1 in claim_evidence + register_drift + unbacked_quantitative + report_drift | otherwise optional |
 
-Note on `paragraph_quote`: class-conditional. Required for
-`register_drift`, `claim_evidence`, `unbacked_quantitative`,
-`report_drift`. Optional for `central_objection`, `missing_section`,
-`throughline`, `section_arc`, `abstract_body_mismatch`,
-`citation_reality` — those are structural, not text-specific.
+**Note on `line_range` and `paragraph_quote` — both class-conditional,
+both required for the SAME four classes.** A finding that critiques
+specific text (`register_drift`, `claim_evidence`,
+`unbacked_quantitative`, `report_drift`) must carry BOTH a
+`line_range` (where the text is) and a `paragraph_quote` (the text
+itself). A finding that critiques structure rather than specific
+text — `section_arc` (a whole-section arc problem), `throughline`,
+`missing_section`, `central_objection`, `abstract_body_mismatch`,
+`citation_reality` — carries `section` (when section-scoped) but NOT
+`line_range` and NOT `paragraph_quote`. There is no single line span
+for "the Results section's narrative arc is wrong." Do NOT invent a
+`line_range` for a section-scoped finding just to satisfy a perceived
+requirement — the validator does not require it for these classes,
+and a fabricated range is worse than an absent one.
 
 **JSON validity:**
 

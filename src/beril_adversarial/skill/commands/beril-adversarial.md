@@ -44,17 +44,21 @@ Run in a Bash block:
 
 If the command is not found, tell the user:
 
-> The `beril-adversarial` package isn't on your PATH. Install it with:
+> The `beril-adversarial` package isn't on your PATH. From your BERIL
+> root, run the four steps below in order (install package → verify
+> CLI loads → configure cross-skill bindings → deploy skill files into
+> BERIL):
 >
->     pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git
+>     cd ~/BERIL-research-observatory
+>     pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git \
+>       && beril-adversarial --version \
+>       && beril-adversarial configure \
+>       && beril-adversarial install-skill .
 >
 > If you have an SSH key registered with GitHub you can also use the
 > SSH URL — note the explicit `git@`, which is required:
 >
 >     pipx install --force git+ssh://git@github.com/ArkinLaboratory/beril-adversarial-skill.git
->
-> Then run `beril-adversarial install-skill .` from your BERIL root,
-> followed by `/beril-adversarial-configure`.
 
 Stop here if the command is missing. Do not try fallback installs.
 

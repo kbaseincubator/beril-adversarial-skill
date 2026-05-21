@@ -1557,3 +1557,157 @@ def test_v2_doc_emits_deprecation_warning():
     assert any("DEPRECATED" in w and "v3" in w for w in warnings), (
         f"v2 doc should get deprecation warning pointing at v3: {warnings}"
     )
+
+
+# ============================================================================
+# v0.7.1 — line_range class-conditional fix (paper-writer team bug report)
+# ============================================================================
+#
+# Bug: SECTION_LEVEL_REQUIRED_FIELDS contained {section, line_range},
+# making line_range mandatory on EVERY section-scoped finding. But
+# section/document-scoped classes (section_arc, throughline,
+# missing_section, central_objection, abstract_body_mismatch) carry
+# `section` while having no single meaningful line range. The validator
+# deterministically rejected correct findings and blocked the
+# paper-writer review-rewrite consumer. Fix: line_range is now
+# class-conditional (PAPER_LINE_RANGE_REQUIRED_CLASSES), mirroring the
+# paragraph_quote carve-out.
+
+
+def _paper_finding_no_line_range(fid, cls, severity="P1"):
+    """A section-scoped paper finding that carries `section` but NOT
+    `line_range` or `paragraph_quote` — the shape a structural class
+    legitimately emits."""
+    return {
+        "id": fid,
+        "class": cls,
+        "severity": severity,
+        "confidence": "high",
+        "section": "Results",
+        "issue": "a whole-section structural critique",
+        "fix_target": "results.v1.md",
+        "fix_hint": "restructure the section",
+    }
+
+
+def test_v3_paper_section_arc_without_line_range_passes():
+    """The exact bug from the paper-writer team's Stage 7 holdout:
+    a section_arc finding with `section` but no `line_range` must
+    validate clean. Previously rejected as non-correctable."""
+    doc = _make_paper_doc(
+        schema_version="adversarial-review-paper.v3",
+        findings=[
+            _paper_finding_no_line_range("F001", "section_arc"),
+            _make_paper_manuscript_wide_finding(
+                fid="F002", cls="central_objection", severity="info"
+            ),
+        ],
+    )
+    errors, _, _, _ = validator.validate(doc)
+    assert errors == [], (
+        f"section_arc with section but no line_range should pass: {errors}"
+    )
+
+
+def test_v3_paper_structural_classes_without_line_range_pass():
+    """All section/document-scoped classes may carry `section` without
+    `line_range`. throughline, missing_section, abstract_body_mismatch,
+    citation_reality — none of them require a line span."""
+    for cls in ("throughline", "missing_section", "abstract_body_mismatch"):
+        f = _paper_finding_no_line_range("F001", cls)
+        doc = _make_paper_doc(
+            schema_version="adversarial-review-paper.v3",
+            findings=[
+                f,
+                _make_paper_manuscript_wide_finding(
+                    fid="F002", cls="central_objection", severity="info"
+                ),
+            ],
+        )
+        errors, _, _, _ = validator.validate(doc)
+        assert errors == [], f"{cls} with section but no line_range should pass: {errors}"
+
+
+def test_v3_paper_citation_reality_section_scoped_without_line_range_passes():
+    """citation_reality is section-scoped, not line-scoped. With a
+    section and a citation_id but no line_range, it must pass."""
+    f = _paper_finding_no_line_range("F001", "citation_reality")
+    f["citation_id"] = "Smith2020"  # required for citation_reality (D2)
+    doc = _make_paper_doc(
+        schema_version="adversarial-review-paper.v3",
+        findings=[
+            f,
+            _make_paper_manuscript_wide_finding(
+                fid="F002", cls="central_objection", severity="info"
+            ),
+        ],
+    )
+    errors, _, _, _ = validator.validate(doc)
+    assert errors == [], f"citation_reality without line_range should pass: {errors}"
+
+
+def test_v3_paper_register_drift_still_requires_line_range():
+    """The fix is class-conditional, not a blanket drop. Line-specific
+    text-critique classes (register_drift, claim_evidence,
+    unbacked_quantitative, report_drift) STILL require line_range when
+    section-scoped."""
+    f = _paper_finding_no_line_range("F001", "register_drift")
+    # register_drift also requires paragraph_quote — add it so the ONLY
+    # missing field under test is line_range.
+    f["paragraph_quote"] = "the offending sentence"
+    doc = _make_paper_doc(
+        schema_version="adversarial-review-paper.v3",
+        findings=[
+            f,
+            _make_paper_manuscript_wide_finding(
+                fid="F002", cls="central_objection", severity="info"
+            ),
+        ],
+    )
+    errors, _, _, _ = validator.validate(doc)
+    assert any("line_range" in e for e in errors), (
+        f"register_drift with section but no line_range should still fail: {errors}"
+    )
+
+
+def test_v3_paper_claim_evidence_with_line_range_passes():
+    """Positive control: a line-specific class WITH line_range +
+    paragraph_quote validates clean."""
+    doc = _make_paper_doc(
+        schema_version="adversarial-review-paper.v3",
+        findings=[
+            _make_paper_finding(fid="F001", cls="claim_evidence"),
+            _make_paper_manuscript_wide_finding(
+                fid="F002", cls="central_objection", severity="info"
+            ),
+        ],
+    )
+    errors, _, _, _ = validator.validate(doc)
+    assert errors == [], f"claim_evidence with full locus should pass: {errors}"
+
+
+def test_paper_v2_section_arc_without_line_range_also_passes():
+    """The line_range fix applies to paper v2 too (forensic shape).
+    A v2 section_arc finding without line_range should validate."""
+    f = _paper_finding_no_line_range("F001", "section_arc")
+    doc = _make_paper_doc(
+        schema_version="adversarial-review-paper.v2",
+        findings=[
+            f,
+            _make_paper_manuscript_wide_finding(
+                fid="F002", cls="narrative_weakness", severity="info"
+            ),
+        ],
+    )
+    errors, _, _, _ = validator.validate(doc)
+    assert errors == [], f"v2 section_arc without line_range should pass: {errors}"
+
+
+def test_harden_stderr_is_safe_under_pytest_capture():
+    """v0.7.1 bug 2: _harden_stderr restores stderr to blocking mode.
+    Under pytest capture, sys.stderr has no real fileno — the function
+    must no-op silently, not raise."""
+    # Should not raise regardless of stderr's nature.
+    validator._harden_stderr()
+    # Calling it twice is also safe.
+    validator._harden_stderr()

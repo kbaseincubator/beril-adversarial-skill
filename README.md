@@ -258,14 +258,17 @@ logic.
 ## Install
 
 ```bash
-# HTTPS (works on shared hosts where SSH keys aren't registered with GitHub —
-# e.g. JupyterHub instances; relies on a credential helper or a PAT)
-pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git
-
+# Run from BERIL_ROOT. Steps in order: install package → verify CLI loads →
+# configure cross-skill bindings → deploy skill files into BERIL.
 cd <BERIL_ROOT>
-beril-adversarial install-skill .
-beril-adversarial configure   # sanity-check claude/codex CLIs
+pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git \
+  && beril-adversarial --version \
+  && beril-adversarial configure \
+  && beril-adversarial install-skill .
 ```
+
+(HTTPS URL above works on shared hosts where SSH keys aren't registered with
+GitHub — e.g., JupyterHub instances; relies on a credential helper or a PAT.)
 
 If you have an SSH key registered with the ArkinLaboratory GitHub org, the
 SSH URL also works (and avoids needing a credential helper):
