@@ -2,6 +2,116 @@
 
 ---
 
+## v0.7.0.6 — 2026-05-23 (HOTFIX — validator wrongly required slide-level fields on null-locus findings)
+
+**Code-change hotfix, NOT docs-only** (same exception class as
+v0.7.0.5). Surfaced by an operator running `--type presentation` on
+`ibd_phage_targeting` draft_1 — a deterministic, consumer-blocking
+validator bug.
+
+### Bug (P0) — `"slide_id": null` misclassified as slide-scoped
+
+`validate_presentation_review.py` decided whether a finding was
+slide-scoped (presentation) or section-scoped (paper) with a bare
+key-MEMBERSHIP test — `"slide_id" in finding`. That test is True for
+a key present with a `null` value.
+
+The presentation reviewer prompt instructs the model to OMIT
+`slide_id` for a deck-level finding (`adversarial_presentation.v3.md`:
+"Don't emit `slide_id: null` ... omit them"). The reviewer LLM
+follows that only intermittently — it frequently serializes a
+deck-level finding as `"slide_id": null` instead. The membership test
+then saw the present-but-null key, classified the finding as
+slide-scoped, and demanded `slide_position`, `slide_layout`, and (for
+`qa_softball`/`register_drift`/`claim_evidence`) `title_quote` —
+fields a deck-level finding has no business carrying. The
+`adversarial_review.json` was rejected as "non-correctable" and
+flagged unsafe for the presentation-maker review-rewrite consumer.
+
+Observed on `ibd_phage_targeting` draft_1: findings F002
+(`throughline`) and F009 (`qa_softball`) were emitted with
+`"slide_id": null`; F012/F013/F014 — the same deck-level finding
+kind — omitted the key and validated fine. Same finding type, two
+serializations, only one rejected. "Re-running often resolves it" is
+misleading guidance here: the failure is a per-finding coin-flip
+between the omit form and the null form, not a fixable
+LLM-discipline drift.
+
+The bug is symmetric on the paper schema (`"section": null`) and
+predates the v3 schema — it has been latent since the single-array
+v2 schema (v0.5.0 presentation, v0.6.0 paper).
+
+**Fix:** new `_has_locus(finding, locus_field)` helper — a finding is
+locus-scoped IFF the locus field is present AND non-null. `null` and
+an absent key are now treated identically ("no slide/section locus"
+→ deck-level / manuscript-wide). Three call sites converted from
+`X in f` to `_has_locus(f, X)`: the presentation v2/v3 branch, the
+paper v2/v3 branch, and the slide/deck locus counter that feeds the
+`PASS:` summary line. The reviewer prompt is unchanged — it already
+asks for the omit form; the validator now tolerates both, per the
+project rule that prompt discipline must be backed by code.
+
+The summary-count mismatch that appeared alongside this bug in the
+operator report (`P0=4` vs actual `5`) was never the blocker — the
+validator already auto-corrects summary counts; it only surfaced
+because the two hard errors blocked the rewrite. With the hard
+errors gone the summary self-heals and the run exits 2 (warn),
+consumer-safe.
+
+### Test coverage
+
+6 new tests (206 total, was 200):
+- deck-level `throughline` with `slide_id: null` → passes (the F002
+  shape).
+- deck-level `qa_softball` with `slide_id: null` → passes (the F009
+  shape — harder; `qa_softball` is in `TITLE_QUOTE_REQUIRED_CLASSES`).
+- a real finding with an INTEGER `slide_id` and a missing
+  `slide_layout` → still errors (the fix does not loosen real
+  slide-scoped findings).
+- a null-`slide_id` finding is counted deck-level in `summary_stats`.
+- paper `section: null` on a line-specific class → treated
+  manuscript-wide; `line_range`/`paragraph_quote` not demanded.
+- end-to-end CLI: a v3 presentation doc with the F002 + F009
+  null-`slide_id` shape exits 0 with the correct slide/deck split.
+
+End-to-end confirmation: the operator's actual `ibd_phage_targeting`
+draft_1 `adversarial_review.json` now exits 2 (summary auto-corrected,
+consumer-safe) instead of 1 (FAIL).
+
+### Consumer audit
+
+The presentation-maker review-rewrite consumer (`revise_loop.py`) was
+audited: its `Finding.slide_id` property uses `isinstance(sid, int)`
+and routing uses `is not None`, so it already treats `slide_id: null`
+and an absent key identically — no consumer-side mis-routing, and no
+validator normalize-on-write needed. (One cosmetic blemish noted for
+the presentation-maker team: `_render_next_actions` uses
+`finding.get("slide_id", "n/a")`, which returns `None` rather than
+`"n/a"` for a present-but-null key — their repo, their fix.)
+
+### Operator impact
+
+```bash
+pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git
+beril-adversarial install-skill <BERIL_ROOT>
+beril-adversarial --version    # 0.7.0.6
+```
+
+This release **does** change deployed skill files (the validator).
+Re-install is required for the fix to take effect. The
+presentation-maker review-rewrite consumer benefits immediately —
+deck-level findings serialized with a null `slide_id` are no longer
+rejected.
+
+### Why 0.7.0.6, not 0.7.1
+
+v0.7.1 remains reserved for fusion (`--reviewer claude,codex`), as
+promised to consumers in the v0.7.0 cross-team message. This is a
+surgical consumer-unblocking hotfix to the v0.7.0 line — it fits the
+0.7.0.x patch series, same as v0.7.0.5.
+
+---
+
 ## v0.7.0.5 — 2026-05-05 (HOTFIX — validator wrongly required line_range on section-scoped findings)
 
 **This is a code-change hotfix, NOT a docs-only release** (unlike

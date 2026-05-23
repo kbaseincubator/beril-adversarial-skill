@@ -231,7 +231,8 @@ COMMON_REQUIRED_FIELDS = {
     "fix_hint",
 }
 
-# Presentation: slide-level fields required when slide_id is present.
+# Presentation: slide-level fields required when the finding has a slide
+# locus — slide_id present AND non-null (see _has_locus; v0.7.0.6).
 SLIDE_LEVEL_REQUIRED_FIELDS = {
     "slide_id",
     "slide_position",
@@ -370,6 +371,31 @@ def lenient_json_load(text: str) -> Any:
             # caller sees the actual problem, not the post-repair
             # artifact at a different line/column.
             raise original_err from None
+
+
+def _has_locus(finding: Any, locus_field: str) -> bool:
+    """True when a finding is scoped to a specific slide or section.
+
+    A finding is locus-scoped IFF the locus field (``slide_id`` for
+    presentation, ``section`` for paper) is present AND non-null. An
+    explicit ``null`` and an absent key are semantically identical —
+    both mean "no slide/section locus; this is a deck-level /
+    manuscript-wide finding."
+
+    v0.7.0.6 fix: the validator previously decided locus-scoping with a
+    bare ``locus_field in finding`` membership test. The reviewer LLM,
+    instead of OMITTING ``slide_id`` for a deck-level finding (as the
+    prompt instructs — adversarial_presentation.v3.md: "Don't emit
+    slide_id: null ... omit them"), sometimes serializes it as
+    ``"slide_id": null``. Key membership is True for a present-but-null
+    key, so those deck-level findings were misclassified as
+    slide-scoped and the validator demanded slide_position /
+    slide_layout / title_quote that a deck-level finding has no
+    business carrying — a deterministic, consumer-blocking rejection.
+    Prompt discipline drifts; the code is the backstop. Treat null
+    exactly like absent.
+    """
+    return isinstance(finding, dict) and finding.get(locus_field) is not None
 
 
 def compute_correct_summary(
@@ -676,22 +702,28 @@ def validate(
             )
     elif is_presentation_v2 or is_presentation_v3:
         # presentation v2/v3: single findings[] array. slide-level fields
-        # required IFF slide_id is present. v3 differs from v2 only in
-        # the valid class set (handled per-finding via valid_classes_for_schema).
+        # required IFF the finding has a slide locus — slide_id present
+        # AND non-null (see _has_locus; v0.7.0.6: an explicit
+        # `"slide_id": null` is deck-level, identical to omitting the
+        # key). v3 differs from v2 only in the valid class set (handled
+        # per-finding via valid_classes_for_schema).
         for i, f in enumerate(findings):
-            require_locus = isinstance(f, dict) and "slide_id" in f
+            require_locus = _has_locus(f, "slide_id")
             validate_finding(
                 f, f"findings[{i}]", require_slide_fields=require_locus
             )
     else:
         # paper v2 or v3: single findings[] array. section-level fields
-        # required IFF section is present. (require_slide_fields is
-        # the parameter name but in paper context it means "require
-        # the section-level locus fields", per validate_finding's
-        # is_paper branch.) v3 differs from v2 only in the class enum
-        # (rename narrative_weakness -> central_objection).
+        # required IFF the finding has a section locus — section present
+        # AND non-null (see _has_locus; v0.7.0.6: an explicit
+        # `"section": null` is manuscript-wide, identical to omitting
+        # the key). (require_slide_fields is the parameter name but in
+        # paper context it means "require the section-level locus
+        # fields", per validate_finding's is_paper branch.) v3 differs
+        # from v2 only in the class enum (rename narrative_weakness ->
+        # central_objection).
         for i, f in enumerate(findings):
-            require_locus = isinstance(f, dict) and "section" in f
+            require_locus = _has_locus(f, "section")
             validate_finding(
                 f, f"findings[{i}]", require_slide_fields=require_locus
             )
@@ -811,7 +843,11 @@ def validate(
     slide_level_count = 0
     deck_level_count = 0
     for f in findings:
-        if isinstance(f, dict) and locus_field in f:
+        # _has_locus: present AND non-null. A finding serialized with an
+        # explicit null locus is deck-level / manuscript-wide, the same
+        # as one that omits the key (v0.7.0.6) — so the PASS-line
+        # slide/deck split stays correct.
+        if _has_locus(f, locus_field):
             slide_level_count += 1
         else:
             deck_level_count += 1

@@ -1711,3 +1711,187 @@ def test_harden_stderr_is_safe_under_pytest_capture():
     validator._harden_stderr()
     # Calling it twice is also safe.
     validator._harden_stderr()
+
+
+# ============================================================================
+# v0.7.0.6 — null locus treated as absent (deck-level finding serialized
+# with an explicit `"slide_id": null` / `"section": null`)
+# ============================================================================
+#
+# Bug (reported by an operator, ibd_phage_targeting draft_1): the
+# validator decided slide/section scoping with a key-MEMBERSHIP test
+# (`"slide_id" in f`). The reviewer LLM, instead of OMITTING slide_id
+# for a deck-level finding (the prompt says omit), sometimes serializes
+# `"slide_id": null`. Membership is True for a present-but-null key, so
+# those deck-level findings were misclassified as slide-scoped and the
+# validator demanded slide_position / slide_layout / title_quote — a
+# deterministic, consumer-blocking rejection that "re-running" only
+# resolves by coin-flip. Fix: _has_locus tests present-AND-non-null;
+# null is treated identically to an absent key.
+
+
+def test_v3_presentation_throughline_with_null_slide_id_passes():
+    """The exact F002 shape from the operator bug report: a deck-level
+    throughline finding serialized with `"slide_id": null` (instead of
+    omitting the key) must validate clean. Before v0.7.0.6 the
+    membership test `"slide_id" in f` saw the null key and demanded
+    slide_position + slide_layout."""
+    null_throughline = _make_deck_finding(
+        fid="F002", cls="throughline", severity="P1", slide_id=None,
+        substory_id="S4",
+    )
+    doc = _make_doc(
+        schema_version="adversarial-review-presentation.v3",
+        findings=[null_throughline],
+        deck_findings=[
+            _make_deck_finding(
+                fid="DL001", cls="central_objection", severity="info"
+            )
+        ],
+    )
+    errors, _, _, _ = validator.validate(doc)
+    assert errors == [], (
+        f"deck-level throughline with slide_id:null should pass: {errors}"
+    )
+
+
+def test_v3_presentation_qa_softball_with_null_slide_id_passes():
+    """The F009 shape — harder than F002 because qa_softball IS in
+    TITLE_QUOTE_REQUIRED_CLASSES, so the buggy path additionally
+    demanded title_quote. A deck-level qa_softball (a missing-objection
+    finding with no slide locus) serialized with `"slide_id": null`
+    must pass."""
+    null_qa = _make_deck_finding(
+        fid="F009", cls="qa_softball", severity="P1", slide_id=None,
+    )
+    doc = _make_doc(
+        schema_version="adversarial-review-presentation.v3",
+        findings=[null_qa],
+        deck_findings=[
+            _make_deck_finding(
+                fid="DL001", cls="central_objection", severity="info"
+            )
+        ],
+    )
+    errors, _, _, _ = validator.validate(doc)
+    assert errors == [], (
+        f"deck-level qa_softball with slide_id:null should pass: {errors}"
+    )
+
+
+def test_v3_presentation_real_slide_finding_still_requires_fields():
+    """The fix must not loosen real slide-scoped findings. A finding
+    with an INTEGER slide_id but a missing slide_layout must still
+    error — `_has_locus` is True for an integer locus."""
+    bad = _make_finding(fid="F001", slide_id=5, slide_position=5)
+    del bad["slide_layout"]
+    doc = _make_doc(
+        schema_version="adversarial-review-presentation.v3",
+        findings=[bad],
+    )
+    errors, _, _, _ = validator.validate(doc)
+    assert any("slide_layout" in e for e in errors), (
+        f"integer slide_id must still require slide_layout: {errors}"
+    )
+
+
+def test_v3_presentation_null_slide_id_counted_as_deck_level():
+    """The locus counter must also treat a null slide_id as deck-level,
+    so the PASS-line slide/deck split is correct."""
+    real_slide = _make_finding(
+        fid="F001", slide_id=3, slide_position=3, cls="claim_evidence"
+    )
+    null_finding = _make_deck_finding(
+        fid="F002", cls="throughline", severity="P1", slide_id=None,
+    )
+    doc = _make_doc(
+        schema_version="adversarial-review-presentation.v3",
+        findings=[real_slide, null_finding],
+        deck_findings=[
+            _make_deck_finding(
+                fid="DL001", cls="central_objection", severity="info"
+            )
+        ],
+    )
+    errors, _, _, stats = validator.validate(doc)
+    assert errors == [], f"unexpected errors: {errors}"
+    # F001 is the only slide-scoped finding; F002 (null slide_id) and
+    # DL001 (no slide_id) are both deck-level.
+    assert stats["locus_count"] == 1, stats
+    assert stats["non_locus_count"] == 2, stats
+
+
+def test_v3_paper_null_section_treated_as_manuscript_wide():
+    """Paper symmetry: a finding serialized with `"section": null` is
+    manuscript-wide, identical to omitting the key. register_drift is a
+    line-specific class — if `section: null` were wrongly treated as
+    section-scoped, the validator would demand line_range +
+    paragraph_quote. With the v0.7.0.6 fix it is manuscript-wide and
+    neither is required."""
+    null_section_finding = {
+        "id": "F001",
+        "class": "register_drift",
+        "severity": "P1",
+        "confidence": "high",
+        "section": None,
+        "issue": "a register problem with no section locus",
+        "fix_target": "results.v1.md",
+        "fix_hint": "fix the register",
+    }
+    doc = _make_paper_doc(
+        schema_version="adversarial-review-paper.v3",
+        findings=[
+            null_section_finding,
+            _make_paper_manuscript_wide_finding(
+                fid="F002", cls="central_objection", severity="info"
+            ),
+        ],
+    )
+    errors, _, _, stats = validator.validate(doc)
+    assert errors == [], (
+        f"section:null finding should be manuscript-wide: {errors}"
+    )
+    assert stats["locus_count"] == 0, stats
+    assert stats["non_locus_count"] == 2, stats
+
+
+def test_cli_v3_presentation_null_slide_id_doc_passes(tmp_path: Path):
+    """End-to-end regression for the reported bug: a presentation v3
+    review with deck-level findings serialized as `"slide_id": null`
+    (the ibd_phage_targeting draft_1 failure) must validate at the CLI
+    with a non-failure exit code. Before v0.7.0.6 this exited 1 with
+    'missing slide-level field(s)'."""
+    real_slide = _make_finding(
+        fid="F001", slide_id=13, slide_position=13, cls="claim_evidence"
+    )
+    null_throughline = _make_deck_finding(
+        fid="F002", cls="throughline", severity="P1", slide_id=None,
+        substory_id="S4",
+    )
+    null_qa = _make_deck_finding(
+        fid="F009", cls="qa_softball", severity="P1", slide_id=None,
+    )
+    doc = _make_doc(
+        schema_version="adversarial-review-presentation.v3",
+        findings=[real_slide, null_throughline, null_qa],
+        deck_findings=[
+            _make_deck_finding(
+                fid="DL001", cls="central_objection", severity="info"
+            )
+        ],
+    )
+    p = tmp_path / "adversarial_review.json"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(VALIDATOR_PATH), str(p)],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, (
+        f"null-slide_id doc should pass at CLI; got rc={result.returncode} "
+        f"stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "PASS" in result.stdout
+    # The PASS line must count the two null-slide_id findings as
+    # deck-level, not slide-level.
+    assert "1 slide-level finding(s)" in result.stdout
+    assert "3 deck-level finding(s)" in result.stdout
