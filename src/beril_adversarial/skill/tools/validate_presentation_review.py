@@ -550,7 +550,19 @@ def validate(
 
     summary = doc.get("summary")
     if not isinstance(summary, dict):
-        errors.append(f"summary must be a dict, got {type(summary).__name__}")
+        # A missing / wrong-typed summary block is fully recoverable: the
+        # summary is derived data and compute_correct_summary() rebuilds
+        # it from the findings array (the ground truth). Record it as an
+        # auto-correction (exit 2), NOT a hard error (exit 1) — consistent
+        # with the validator's summary-is-derived philosophy, and so a
+        # recoverable doc does not trip the v0.7.0.8 contract where the
+        # orchestrator routes validator exit 1 -> shell exit 4. (Audited
+        # for the v0.7.0.8 rc-1 review: this was the one over-strict
+        # exit-1 condition — every other one is genuine non-conformance.)
+        summary_corrections.append(
+            f"summary block is missing or not a dict "
+            f"(got {type(summary).__name__}) — rebuilt from the findings array"
+        )
         summary = {}
 
     # ----- per-finding validation -----

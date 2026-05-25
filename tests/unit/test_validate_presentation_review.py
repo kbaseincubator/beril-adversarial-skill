@@ -911,6 +911,30 @@ def test_cli_warnings_exit_2(tmp_path: Path):
     assert "WARN" in result.stderr
 
 
+def test_cli_missing_summary_block_auto_corrects(tmp_path: Path):
+    """A missing summary block is fully recoverable — the summary is
+    derived data, rebuilt from the findings array — so it auto-corrects
+    (exit 2); it does NOT hard-fail (exit 1). Audited + fixed for the
+    v0.7.0.8 rc-1 -> shell exit 4 change, so a recoverable doc never
+    trips exit 4."""
+    p = tmp_path / "review.json"
+    doc = _make_doc(findings=[_make_finding()])
+    del doc["summary"]
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(VALIDATOR_PATH), str(p)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 2, (
+        f"missing summary must auto-correct (exit 2), not hard-fail; "
+        f"got {result.returncode}\nstderr:\n{result.stderr}"
+    )
+    assert "FAIL" not in result.stderr
+    assert "summary block is missing" in result.stderr
+
+
 def test_cli_handles_path_with_special_chars(tmp_path: Path):
     """Heredoc-quoting fix: validator must accept paths that would
     have broken the old inline shell heredoc."""

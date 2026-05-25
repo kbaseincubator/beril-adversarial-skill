@@ -18,8 +18,10 @@ Exit codes:
      advisory warnings — the .json is still consumer-safe)
   3  config error (claude/codex not installed; tools unavailable)
   4  json not consumer-safe (`review` subcommand only — the reviewer's
-     .json is unparseable even after the orchestrator's automatic
-     JSON-repair pass; the .md report is intact). Added v0.7.0.7.
+     .json is either unparseable even after the orchestrator's automatic
+     JSON-repair pass, or parseable but schema-invalid; the .md report
+     is intact). exit 0 is the only code that means consumer-safe.
+     Added v0.7.0.7; widened to cover schema violations in v0.7.0.8.
 """
 
 from __future__ import annotations

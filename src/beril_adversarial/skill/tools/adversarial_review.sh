@@ -361,11 +361,14 @@ path above. Before finishing, confirm you invoked Write."
 #
 # Echoes the validator's stdout/stderr to the operator on each pass.
 # Returns:
-#   0  the .json is consumer-safe (parsed clean / auto-corrected /
-#      repaired-then-validated), OR a schema violation was found
-#      (validator exit 1 — legacy behaviour: banner, but not fatal).
-#   4  the .json is NOT consumer-safe: unparseable even after the repair
-#      budget was spent. Caller should exit 4.
+#   0  the .json is consumer-safe: parsed clean, auto-corrected, or
+#      repaired-then-validated.
+#   4  the .json is NOT consumer-safe — caller should exit 4. Either it
+#      is unparseable even after the repair budget was spent, OR it is
+#      parseable but schema-invalid (validator exit 1; a schema error is
+#      not mechanically repairable, so no repair pass is run — fail
+#      loud). v0.7.0.8 unified both under exit 4 so that shell exit 0
+#      unambiguously means "consumer-safe".
 validate_and_repair_json() {
   local out_json="$1"
   local validator="$2"
@@ -412,15 +415,18 @@ validate_and_repair_json() {
     elif [[ $validator_rc -eq 1 ]]; then
       echo "" >&2
       echo "================================================================" >&2
-      echo "JSON VALIDATION FAILED — non-correctable schema error(s)" >&2
+      echo "JSON NOT CONSUMER-SAFE — schema validation failed" >&2
       echo "================================================================" >&2
       echo "  The reviewer produced parseable JSON that violates the schema" >&2
-      echo "  (missing required field, invalid enum, duplicate id). This is" >&2
-      echo "  a schema error, not a syntax error, so the JSON-repair pass" >&2
-      echo "  does not apply. The .md report may still be useful; the .json" >&2
-      echo "  is not safe for the consumer (${consumer_label})." >&2
+      echo "  (missing required field, invalid enum, duplicate id, or a" >&2
+      echo "  class invariant). This is a schema error, not a syntax error:" >&2
+      echo "  it is not mechanically repairable, so no repair pass is run." >&2
+      echo "  The .md report is intact and still useful for human review;" >&2
+      echo "  the .json is NOT safe for the consumer (${consumer_label})." >&2
+      echo "  This command exits 4 (v0.7.0.8) so a consumer keying on the" >&2
+      echo "  exit code does not parse a schema-invalid file." >&2
       echo "================================================================" >&2
-      final_rc=0
+      final_rc=4
       break
     elif [[ $validator_rc -eq 4 ]]; then
       if [[ $attempt -ge $max_repair_attempts ]]; then

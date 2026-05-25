@@ -2,6 +2,78 @@
 
 ---
 
+## v0.7.0.8 — 2026-05-25 (exit-code honesty — a schema-invalid .json also exits 4)
+
+**Follow-on to v0.7.0.7.** v0.7.0.7 made an *unparseable* `.json` exit 4
+but deliberately left a *schema-invalid* `.json` (parses, but missing a
+required field / invalid enum / duplicate id) exiting **0** with only a
+banner. That was a scope boundary, not a defensible end state: a
+schema-invalid `.json` is just as consumer-unsafe as an unparseable
+one, and shipping it with a success exit code is the same silent-fall-
+through failure mode v0.7.0.7 set out to close.
+
+### Change
+
+`adversarial_review.sh` (`validate_and_repair_json`) now returns 4 —
+and the shell exits 4 — when the validator reports a schema violation
+(validator exit 1), not just when the `.json` is unparseable. **As of
+v0.7.0.8, shell exit 0 unambiguously means "the `.json` is consumer-
+safe"**; exit 4 means it is not, whatever the cause (unparseable after
+failed repair, or schema-invalid).
+
+Schema violations are NOT auto-repaired. Unlike an unescaped quote — a
+mechanical, content-preserving fix — a missing field or bad enum can
+only be fixed by the model inventing a value, which is not verifiable.
+The correct response is to fail loud and let the operator re-run.
+
+### Validator rc-1 audit
+
+Before wiring validator exit 1 to a hard shell exit, every one of the
+validator's 18 `error` conditions was audited for false positives — a
+check that could reject a genuinely conformant file would, under this
+change, halt a consumer pipeline. Result: 17 are genuine non-
+conformance checks (the historically buggy locus-conditional field
+requirements were already fixed in v0.7.0.6 and v0.7.1). One
+over-strict condition was found and fixed:
+
+- **Missing / non-dict `summary` block** previously caused a hard error
+  (exit 1). The summary is *derived* data — `compute_correct_summary()`
+  rebuilds it entirely from the findings array — so a missing summary
+  is fully recoverable. It is now an auto-correction (exit 2), consistent
+  with the validator's existing summary-is-derived philosophy. A
+  partial summary (wrong counts) was already auto-corrected; this
+  closes the "summary absent entirely" gap.
+
+### Consumer impact
+
+No new exit code — exit 4 already shipped in v0.7.0.7; this only widens
+what reaches it. A consumer that already handles exit 4 (per the
+v0.7.0.7 cross-team note) needs no change. CONTRACT.md's documented
+consumer call patterns are updated: exit 4's description now covers
+both causes, and exit 0/2 is called out as the only consumer-safe
+signal.
+
+### Testing
+
+209 tests pass (was 208). New test: a missing `summary` block is
+auto-corrected (exit 2), not failed (exit 1). The shell's rc-1 → exit-4
+mapping is covered by an offline control-flow simulation of
+`validate_and_repair_json` under `set -euo pipefail` (10 cases, stubbed
+validator exit codes).
+
+### Operator
+
+```
+pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git
+beril-adversarial install-skill <BERIL_ROOT>
+beril-adversarial --version    # 0.7.0.8
+```
+
+Changes deployed skill files (validator + orchestrator shell). Re-install
+required.
+
+---
+
 ## v0.7.0.7 — 2026-05-25 (HOTFIX — automatic JSON-repair backstop for unparseable reviewer output)
 
 **Code-change hotfix, NOT docs-only** (third such exception in the
