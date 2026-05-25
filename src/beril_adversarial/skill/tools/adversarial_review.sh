@@ -251,6 +251,241 @@ fi
 mkdir -p "$STATE_DIR"
 
 # ==============================================================================
+# JSON-validity backstop (v0.7.0.7)
+#
+# Why this exists: the reviewer LLM composes the entire adversarial_review
+# .json itself and writes it to disk via its Write tool. There is no
+# Python serialization layer to escape strings — so an unescaped inner
+# double-quote inside a string value (a scare-quoted term, a quoted
+# title) silently produces a .json that does not parse. The reviewer
+# prompt has carried an explicit anti-pattern rule since v0.6.2; it
+# reduces but does not eliminate the failure (it recurred in v0.7.0.6).
+# Per the project rule that prompt discipline must be backed by a code
+# check, this is that code backstop.
+#
+# A deterministic regex repair is impossible — an unescaped inner quote
+# is ambiguous (see feedback_llm_json_unfixable_in_parser.md). The
+# recovery is detect-and-regenerate: hand the model its own malformed
+# file and ask it to re-emit valid JSON, changing ONLY escaping/quoting.
+#
+# Self-contained (own `claude -p` call) because the presentation/paper
+# review paths are early-dispatch and run before invoke_claude_with_retry
+# and friends are defined.
+# ==============================================================================
+
+# Run one JSON-repair fix pass against a malformed reviewer .json.
+#
+# Hands the model its own malformed file plus the parser diagnostic and
+# asks it to re-emit valid JSON, changing only string escaping/quoting
+# (and trailing commas). Content-preserving by contract; the caller
+# re-validates afterwards.
+#
+# Args:
+#   $1  json_file        absolute path to the malformed .json (rewritten in place)
+#   $2  model            claude model id
+#   $3  validator_stderr the validator's diagnostic text (carries the
+#                        decoder line/column; inlined into the prompt)
+# Returns: 0 if the claude subprocess exited 0 (the file may or may not
+#          now parse — the caller re-validates); nonzero if claude could
+#          not be run at all.
+invoke_json_repair_pass() {
+  local json_file="$1"
+  local model="$2"
+  local validator_stderr="$3"
+
+  if ! command -v claude &>/dev/null; then
+    echo "Error: 'claude' CLI not available — cannot run JSON-repair pass." >&2
+    return 1
+  fi
+  if [[ ! -s "$json_file" ]]; then
+    echo "Error: cannot repair an empty/missing JSON file: $json_file" >&2
+    return 1
+  fi
+
+  local repair_sys="$PROMPTS_DIR/json_repair.v1.md"
+  if [[ ! -f "$repair_sys" ]]; then
+    echo "Error: JSON-repair system prompt missing at $repair_sys" >&2
+    return 1
+  fi
+
+  local malformed_content sys_prompt
+  malformed_content="$(cat "$json_file")"
+  sys_prompt="$(cat "$repair_sys")"
+
+  local repair_prompt="A file that must contain valid JSON currently fails to parse.
+
+FILE (absolute path — read and overwrite exactly this path):
+  ${json_file}
+
+PARSER DIAGNOSTIC:
+${validator_stderr}
+
+The current (malformed) file content is reproduced between the markers
+below, byte-identical to what is on disk:
+
+===BEGIN MALFORMED JSON===
+${malformed_content}
+===END MALFORMED JSON===
+
+Produce a corrected version that parses as strict JSON and write it to
+the absolute path above using the Write tool. Follow the repair rules
+in your system prompt: change ONLY string escaping/quoting (and trailing
+commas); preserve every finding, field, number, identifier, enum value,
+and quoted phrase exactly. Do not add, drop, reword, or reorder anything.
+
+Deliver the result ONLY by invoking the Write tool with the absolute
+path above. Before finishing, confirm you invoked Write."
+
+  local rc=0
+  CLAUDECODE= claude -p \
+    --model "$model" \
+    --system-prompt "$sys_prompt" \
+    --allowedTools "Read,Write" \
+    --dangerously-skip-permissions \
+    "$repair_prompt" \
+    < /dev/null \
+    || rc=$?
+
+  return $rc
+}
+
+# Validate a reviewer .json and, if it does not parse at all, run the
+# JSON-repair fix pass and re-validate.
+#
+# Args:
+#   $1  out_json        absolute path to the .json under test
+#   $2  validator       absolute path to the validator script
+#   $3  model           claude model id (for the repair pass)
+#   $4  consumer_label  human label for banners (e.g. "presentation-maker
+#                       review-rewrite loop")
+#
+# Echoes the validator's stdout/stderr to the operator on each pass.
+# Returns:
+#   0  the .json is consumer-safe (parsed clean / auto-corrected /
+#      repaired-then-validated), OR a schema violation was found
+#      (validator exit 1 — legacy behaviour: banner, but not fatal).
+#   4  the .json is NOT consumer-safe: unparseable even after the repair
+#      budget was spent. Caller should exit 4.
+validate_and_repair_json() {
+  local out_json="$1"
+  local validator="$2"
+  local model="$3"
+  local consumer_label="$4"
+
+  if ! command -v python3 &>/dev/null || [[ ! -f "$validator" ]]; then
+    # No validator available — behave as the pre-validator builds did.
+    return 0
+  fi
+
+  local max_repair_attempts=2
+  local attempt=0
+  local final_rc=0
+  local orig_size=0
+  local v_err_file="${out_json}.validator-stderr.tmp"
+  local orig_snapshot="${out_json}.prerepair.tmp"
+  local validator_rc v_stdout v_stderr
+
+  while : ; do
+    validator_rc=0
+    v_stdout=""
+    : > "$v_err_file"
+    v_stdout="$(python3 "$validator" "$out_json" 2>"$v_err_file")" || validator_rc=$?
+    v_stderr=""
+    if [[ -f "$v_err_file" ]]; then
+      v_stderr="$(cat "$v_err_file")"
+    fi
+    rm -f "$v_err_file"
+    if [[ -n "$v_stdout" ]]; then
+      printf '%s\n' "$v_stdout"
+    fi
+    if [[ -n "$v_stderr" ]]; then
+      printf '%s\n' "$v_stderr" >&2
+    fi
+
+    if [[ $validator_rc -eq 0 ]]; then
+      final_rc=0
+      break
+    elif [[ $validator_rc -eq 2 ]]; then
+      echo "Note: validator exit 2 — review shipped. See validator stderr above for details." >&2
+      final_rc=0
+      break
+    elif [[ $validator_rc -eq 1 ]]; then
+      echo "" >&2
+      echo "================================================================" >&2
+      echo "JSON VALIDATION FAILED — non-correctable schema error(s)" >&2
+      echo "================================================================" >&2
+      echo "  The reviewer produced parseable JSON that violates the schema" >&2
+      echo "  (missing required field, invalid enum, duplicate id). This is" >&2
+      echo "  a schema error, not a syntax error, so the JSON-repair pass" >&2
+      echo "  does not apply. The .md report may still be useful; the .json" >&2
+      echo "  is not safe for the consumer (${consumer_label})." >&2
+      echo "================================================================" >&2
+      final_rc=0
+      break
+    elif [[ $validator_rc -eq 4 ]]; then
+      if [[ $attempt -ge $max_repair_attempts ]]; then
+        echo "" >&2
+        echo "================================================================" >&2
+        echo "JSON NOT CONSUMER-SAFE — automatic repair could not fix the .json" >&2
+        echo "================================================================" >&2
+        echo "  The reviewer's .json does not parse, and ${max_repair_attempts} automatic" >&2
+        echo "  JSON-repair pass(es) did not resolve it. The .md report is" >&2
+        echo "  intact and still useful for human review; the .json is NOT" >&2
+        echo "  safe for the consumer (${consumer_label})." >&2
+        echo "  This command exits 4 so a consumer keying on the exit code" >&2
+        echo "  does not parse a malformed file. The malformed .json is left" >&2
+        echo "  in place (not deleted) for forensic inspection." >&2
+        echo "================================================================" >&2
+        if [[ -f "$orig_snapshot" ]]; then
+          # Leave the reviewer's ORIGINAL malformed output in place — it
+          # is the honest forensic artifact — rather than the last
+          # (also-failed) repair attempt.
+          cp -f "$orig_snapshot" "$out_json" 2>/dev/null || true
+        fi
+        final_rc=4
+        break
+      fi
+      if [[ $attempt -eq 0 ]]; then
+        # Snapshot the reviewer's original malformed output before the
+        # first repair overwrites it (for restore + size comparison).
+        cp -f "$out_json" "$orig_snapshot" 2>/dev/null || true
+        if [[ -f "$orig_snapshot" ]]; then
+          orig_size="$(wc -c < "$orig_snapshot" 2>/dev/null || echo 0)"
+        fi
+      fi
+      attempt=$((attempt + 1))
+      echo "" >&2
+      echo "Validator: the reviewer's .json does not parse — running automatic" >&2
+      echo "JSON-repair pass ${attempt}/${max_repair_attempts}..." >&2
+      if invoke_json_repair_pass "$out_json" "$model" "$v_stderr"; then
+        # Guard against a repair that dropped content (drastic shrink).
+        local new_size=0
+        if [[ -f "$out_json" ]]; then
+          new_size="$(wc -c < "$out_json" 2>/dev/null || echo 0)"
+        fi
+        if [[ ${orig_size:-0} -gt 0 && ${new_size:-0} -gt 0 ]] \
+           && (( new_size * 100 < orig_size * 60 )); then
+          echo "Warning: repair pass ${attempt} produced ${new_size}B vs" >&2
+          echo "  ${orig_size}B original — likely dropped content. Discarding" >&2
+          echo "  it and restoring the original .json before re-validating." >&2
+          cp -f "$orig_snapshot" "$out_json" 2>/dev/null || true
+        fi
+      else
+        echo "Warning: JSON-repair pass ${attempt} could not be run." >&2
+      fi
+      # loop: re-validate
+    else
+      echo "Warning: validator exited with unexpected code ${validator_rc}." >&2
+      final_rc=0
+      break
+    fi
+  done
+
+  rm -f "$orig_snapshot" "$v_err_file"
+  return $final_rc
+}
+
+# ==============================================================================
 # Presentation review path (early dispatch — separate from project/plan/paper)
 #
 # Why early dispatch: presentation takes a draft_dir (absolute path), not a
@@ -543,52 +778,26 @@ block before emitting JSON."
     exit 2
   fi
 
-  # Programmatic post-checker: validate schema literal, summary count
-  # consistency, required-field presence, severity/class enum membership,
-  # and advisory smells (zero P0s on a 20+ slide deck, missing
-  # narrative_weakness). Pulls into a dedicated script so argv handling
-  # is robust against special chars in paths and so the validator can
-  # do richer checks than a shell heredoc reasonably permits.
+  # Programmatic post-checker + JSON-repair backstop. The validator
+  # checks schema literal, summary-count consistency, required-field
+  # presence, and severity/class enum membership; validate_and_repair_json
+  # additionally runs an automatic JSON-repair fix pass if the reviewer's
+  # .json does not parse at all (validator exit 4 — almost always an
+  # unescaped inner double-quote). See validate_and_repair_json() above.
   local VALIDATOR="$SKILL_DIR/tools/validate_presentation_review.py"
-  if command -v python3 &>/dev/null && [[ -f "$VALIDATOR" ]]; then
-    local validator_rc=0
-    python3 "$VALIDATOR" "$OUT_JSON" || validator_rc=$?
-    case $validator_rc in
-      0)
-        : ;;  # pass — clean
-      2)
-        # exit 2 covers (a) advisory warnings (zero-P0 on large deck,
-        # missing narrative_weakness) and (b) auto-corrected summary
-        # mismatches (v0.4.1+). The validator's stderr already prints
-        # a prominent AUTO-CORRECTED block in case (b), so we don't
-        # need to re-banner; just acknowledge the .json is consumer-safe.
-        echo "Note: validator exit 2 — review shipped. See validator stderr above for details." >&2
-        ;;
-      1)
-        echo "" >&2
-        echo "================================================================" >&2
-        echo "JSON VALIDATION FAILED — non-correctable error(s)" >&2
-        echo "================================================================" >&2
-        echo "  The reviewer produced a JSON file with structural problems" >&2
-        echo "  that cannot be auto-corrected (schema violation, invalid enum" >&2
-        echo "  values, duplicate IDs, narrative_weakness invariants)." >&2
-        echo "  The .md report may still be useful, but the .json is not safe" >&2
-        echo "  for the consumer (presentation-maker review-rewrite loop)." >&2
-        echo "  Re-running often resolves stochastic prompt-discipline failures." >&2
-        echo "================================================================" >&2
-        # Note: we do NOT exit nonzero here. The user gets a clear warning
-        # and can decide whether to re-run. Failing hard would discard
-        # work that the .md report still represents.
-        ;;
-      *)
-        echo "Warning: validator exited with unexpected code $validator_rc" >&2
-        ;;
-    esac
-  fi
+  local json_safety_rc=0
+  validate_and_repair_json "$OUT_JSON" "$VALIDATOR" "$MODEL" \
+    "presentation-maker review-rewrite loop" || json_safety_rc=$?
 
   echo "Presentation review complete."
   echo "  JSON: ${OUT_JSON}"
   echo "  MD:   ${OUT_MD}"
+  if [[ $json_safety_rc -eq 4 ]]; then
+    # The .json could not be made consumer-safe even after auto-repair.
+    # Exit 4 so a consumer keying on the exit code does not parse a
+    # malformed file. The .md report is intact.
+    exit 4
+  fi
   exit 0
 }
 
@@ -901,43 +1110,27 @@ miscount, but try)."
     exit 2
   fi
 
-  # Programmatic post-checker (validator handles paper.v2 + presentation.v1/v2)
+  # Programmatic post-checker + JSON-repair backstop. See
+  # validate_and_repair_json() above. Schema-agnostic: it covers the
+  # paper schema exactly as it covers presentation.
   local VALIDATOR="$SKILL_DIR/tools/validate_review.py"
   if [[ ! -f "$VALIDATOR" ]]; then
     # Fallback to old name during the v0.5 → v0.6 transition
     VALIDATOR="$SKILL_DIR/tools/validate_presentation_review.py"
   fi
-  if command -v python3 &>/dev/null && [[ -f "$VALIDATOR" ]]; then
-    local validator_rc=0
-    python3 "$VALIDATOR" "$OUT_JSON" || validator_rc=$?
-    case $validator_rc in
-      0)
-        : ;;  # pass — clean
-      2)
-        echo "Note: validator exit 2 — review shipped. See validator stderr above for details." >&2
-        ;;
-      1)
-        echo "" >&2
-        echo "================================================================" >&2
-        echo "JSON VALIDATION FAILED — non-correctable error(s)" >&2
-        echo "================================================================" >&2
-        echo "  The reviewer produced a JSON file with structural problems" >&2
-        echo "  that cannot be auto-corrected (schema violation, invalid enum" >&2
-        echo "  values, duplicate IDs, narrative_weakness invariants)." >&2
-        echo "  The .md report may still be useful, but the .json is not safe" >&2
-        echo "  for the consumer (paper-writer review-rewrite loop)." >&2
-        echo "  Re-running often resolves stochastic prompt-discipline failures." >&2
-        echo "================================================================" >&2
-        ;;
-      *)
-        echo "Warning: validator exited with unexpected code $validator_rc" >&2
-        ;;
-    esac
-  fi
+  local json_safety_rc=0
+  validate_and_repair_json "$OUT_JSON" "$VALIDATOR" "$MODEL" \
+    "paper-writer review-rewrite loop" || json_safety_rc=$?
 
   echo "Paper review complete."
   echo "  JSON: ${OUT_JSON}"
   echo "  MD:   ${OUT_MD}"
+  if [[ $json_safety_rc -eq 4 ]]; then
+    # The .json could not be made consumer-safe even after auto-repair.
+    # Exit 4 so a consumer keying on the exit code does not parse a
+    # malformed file. The .md report is intact.
+    exit 4
+  fi
   exit 0
 }
 

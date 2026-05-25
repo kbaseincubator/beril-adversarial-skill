@@ -2,6 +2,132 @@
 
 ---
 
+## v0.7.0.7 — 2026-05-25 (HOTFIX — automatic JSON-repair backstop for unparseable reviewer output)
+
+**Code-change hotfix, NOT docs-only** (third such exception in the
+0.7.0.x series, after v0.7.0.5 and v0.7.0.6). Surfaced by the
+presentation-maker team's M6 Tier C run: `--type presentation` on
+`functional_dark_matter` draft_2 produced an `adversarial_review.json`
+that `json.loads()` rejected at line 74 — a consumer-blocking failure.
+
+### Bug — reviewer emits unparseable JSON; nothing recovers it
+
+The reviewer LLM composes the entire `adversarial_review.json` itself
+and writes it to disk via its `Write` tool. There is no Python
+serialization layer to escape strings. When the model writes an
+unescaped double-quote inside a string value — a scare-quoted term, a
+quoted title — the `"` terminates the JSON string early and the file
+no longer parses. On `functional_dark_matter` draft_2 the `issue`
+field of one finding contained `...in what sense does this "validate"
+the lab-field concordance?...` with literal `"` around `validate`.
+
+This is **not new.** It is the same failure class fixed in v0.6.2,
+where the chosen remedy was a prompt-level anti-pattern rule. That
+rule is still live in the v3 prompts (CRITICAL banner, anti-pattern,
+four correct alternatives) — and it failed anyway. A prompt-only fix
+for this class has now been empirically falsified twice. Per the
+project rule that prompt discipline must be backed by a code check
+(`feedback_prompt_discipline_needs_post_check.md`), v0.7.0.7 adds the
+missing code backstop.
+
+Three evaluated remedies and why only one applies:
+
+- **Re-serialize each field with `json.dumps`** — inapplicable. There
+  is no Python layer holding field values; the LLM writes the whole
+  document itself.
+- **Structured-output / JSON mode** — cannot work. The review is the
+  argument to a `Write` tool call; no output mode constrains the
+  *content* of a free-composed tool-argument string to be valid JSON.
+  Also non-portable (`--reviewer codex`).
+- **Validate-and-retry** — the only workable backstop. A deterministic
+  regex repair is impossible (an unescaped inner quote is ambiguous,
+  per `feedback_llm_json_unfixable_in_parser.md`); the recovery is
+  detect-and-regenerate.
+
+The orchestrator never checked whether the reviewer's `.json` parsed:
+`invoke_claude_with_retry` retries only on "Write tool never invoked."
+A "Write invoked, output malformed" result was invisible. The
+validator caught it post-hoc but only failed loud — and the shell
+still `exit 0`-ed, shipping a broken consumer-contract file with a
+success exit code.
+
+### Fix
+
+**1. Validator — distinct exit code 4 for unparseable JSON.**
+`validate_presentation_review.py` previously returned `1` both for
+schema violations (file parsed, schema bad) and for unparseable input
+(file did not parse at all). It now returns **4** for the unparseable
+case — distinct from `1` — so the orchestrator can route syntax
+failures to repair without confusing them with schema failures.
+
+**2. Orchestrator — automatic JSON-repair fix pass.**
+`adversarial_review.sh` gains `validate_and_repair_json()` and
+`invoke_json_repair_pass()`. After the reviewer writes the `.json`,
+the validator runs; on exit 4 the orchestrator hands the model its own
+malformed file plus the parser diagnostic and asks it to re-emit valid
+JSON, changing **only** string escaping/quoting — content preserved by
+contract. Budget: 2 repair passes, re-validating after each. A repair
+that drastically shrinks the file (dropped content) is discarded and
+the original restored. New shipped system prompt:
+`prompts/json_repair.v1.md`. Schema-agnostic — covers `--type paper`
+and `--type presentation` symmetrically.
+
+**3. Honest exit code.** If repair cannot make the `.json` parse, the
+shell now exits **4** (was: `exit 0` with a malformed file). The `.md`
+report is left intact; the malformed `.json` is left in place for
+forensics. A consumer keying on the exit code no longer silently
+parses a bad file. Schema violations (validator exit 1) keep their
+legacy behaviour — banner, shell `exit 0` — and are out of scope for
+this hotfix.
+
+The misleading "Re-running often resolves stochastic prompt-discipline
+failures" operator message is removed: the failure is content-
+dependent, and re-running is a coin-flip, not a fix.
+
+### Consumer impact
+
+`beril-adversarial review` can now return exit **4**. Consumers
+(`presentation-maker` `revise_loop.py` / `m6_score.py`, `paper-writer`)
+should add a `4` branch: treat it like a hard failure — the `.json` is
+not safe to parse; the `.md` is intact. A consumer with an existing
+`else`/default branch already fails loud on `4` (no silent
+fall-through) but with mislabelled messaging. CONTRACT.md's documented
+consumer call patterns are updated with the `4` branch.
+
+### Testing
+
+208 tests pass (was 206). New/updated validator tests: unparseable
+input exits 4, an unescaped inner quote exits 4 (not 1), a trailing
+comma is still repaired and does not get misclassified as unparseable.
+End-to-end: the operator's actual `functional_dark_matter` draft_2
+`adversarial_review.json` now reports validator exit 4 (was a bare
+`exit 1`), which is the signal that triggers the repair pass. The
+shell-side repair pass invokes `claude` and cannot be unit-tested in
+CI; its control flow is covered by `bash -n` and review.
+
+### Operator
+
+```
+pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git
+beril-adversarial install-skill <BERIL_ROOT>
+beril-adversarial --version    # 0.7.0.7
+```
+
+This release changes deployed skill files (the validator, the
+orchestrator shell script, and a new repair prompt). **Re-install is
+required** for the fix to take effect. The JSON-repair pass uses the
+`claude` CLI; in a `claude`-less environment the repair cannot run and
+the command fails loud (exit 4) instead of shipping a broken file.
+
+### Why 0.7.0.7, not 0.7.1
+
+v0.7.1 stays reserved for fusion (`--reviewer claude,codex`), as
+promised to consumers in the v0.7.0 cross-team message. This is a
+surgical consumer-unblocking hotfix to the v0.7.0 line — same series
+as v0.7.0.5 and v0.7.0.6.
+
+---
+
 ## v0.7.0.6 — 2026-05-23 (HOTFIX — validator wrongly required slide-level fields on null-locus findings)
 
 **Code-change hotfix, NOT docs-only** (same exception class as

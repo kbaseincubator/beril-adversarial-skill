@@ -27,6 +27,9 @@ Exit codes (preserved from the shell script):
 - 2  runtime error (subprocess failed, output not produced; OR validator
      auto-corrected and emitted advisory warnings — non-fatal)
 - 3  config error (claude CLI not installed, prompt missing)
+- 4  json not consumer-safe — the reviewer's .json is unparseable even
+     after the orchestrator's automatic JSON-repair pass; the .md report
+     is intact. Added v0.7.0.7.
 """
 
 from __future__ import annotations

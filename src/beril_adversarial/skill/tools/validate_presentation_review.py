@@ -30,9 +30,16 @@ Behavior on summary count mismatch (added in v0.4.1):
 
 Exit codes:
   0  pass (all required fields present, counts match, schema literal OK)
-  1  fail (non-correctable validation errors; details on stderr)
+  1  fail (non-correctable SCHEMA validation errors; the file parsed as
+     JSON but violates the schema — missing required field, invalid
+     enum, duplicate id. Details on stderr.)
   2  warn-only (advisory issues OR auto-corrected summary mismatch)
   3  cli/usage error
+  4  unparseable (the file is not loadable JSON even after lenient
+     trailing-comma repair — almost always an unescaped inner double-
+     quote inside a string value. Distinct from 1 so the orchestrator
+     can route this case to its automatic JSON-repair fix pass; see
+     adversarial_review.sh -> validate_and_repair_json. Added v0.7.0.7.)
 
 Stdout is one summary line on success, e.g.:
   PASS: 17 slide-level findings, 2 deck-level findings (3 P0, 9 P1, 5 P2, 1 info)
@@ -943,23 +950,29 @@ def main(argv: list[str]) -> int:
     try:
         doc = lenient_json_load(raw_text)
     except json.JSONDecodeError as e:
-        # If the lenient loader couldn't repair, surface the ORIGINAL
-        # error (not the post-repair error) — see memory entry
-        # feedback_llm_json_unfixable_in_parser.md: unescaped inner
-        # quotes are NOT repairable; the right fix is at the prompt.
+        # The lenient loader could not parse the file even after
+        # trailing-comma repair. An unescaped inner double-quote is NOT
+        # deterministically repairable in the parser (see memory entry
+        # feedback_llm_json_unfixable_in_parser.md) — the surface error
+        # below is the ORIGINAL one, not a post-repair artifact.
+        #
+        # Recovery is detect-and-regenerate, not parser-repair: the
+        # orchestrator (adversarial_review.sh) routes a code-4 result
+        # to an automatic JSON-repair fix pass. Exit 4 — distinct from
+        # the schema-violation code 1 — is what triggers that routing.
         print(f"Error: file is not valid JSON: {e}", file=sys.stderr)
         # Hint about the most-common cause
         if "delimiter" in str(e):
             print(
-                "  Hint: 'Expecting , delimiter' often means an "
-                "unescaped \" inside a JSON string value. Check the "
-                "indicated line/column for inner quotes (e.g., "
-                "scare-quoted technical terms). The reviewer prompt "
-                "covers this; if it recurs, the prompt may need "
-                "tightening.",
+                "  Hint: 'Expecting , delimiter' usually means an "
+                "unescaped \" inside a JSON string value (e.g., a "
+                "scare-quoted technical term). Check the indicated "
+                "line/column. When run via adversarial_review.sh the "
+                "orchestrator attempts an automatic JSON-repair pass; "
+                "exit 4 here is the signal that triggers it.",
                 file=sys.stderr,
             )
-        return 1
+        return 4
 
     errors, summary_corrections, warnings, stats = validate(doc)
 

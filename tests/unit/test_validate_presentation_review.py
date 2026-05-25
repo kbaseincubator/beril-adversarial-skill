@@ -10,7 +10,8 @@ Replicates paper-writer's post-checker test pattern. Tests cover:
   - Advisory: missing narrative_weakness
   - Hard error: narrative_weakness with non-info severity
   - Hard error: extra info severity on a non-narrative_weakness finding
-  - JSON file unparseable (returns exit 1)
+  - JSON file unparseable (returns exit 4 — distinct from schema
+    failure exit 1, so the orchestrator can route to JSON repair)
   - File not found (exit 3)
 """
 
@@ -807,7 +808,10 @@ def test_cli_missing_file_exits_3(tmp_path: Path):
     assert "not found" in result.stderr
 
 
-def test_cli_unparseable_json_exits_1(tmp_path: Path):
+def test_cli_unparseable_json_exits_4(tmp_path: Path):
+    """Garbage that is not loadable JSON exits 4 (v0.7.0.7) — distinct
+    from schema-violation exit 1 — so the orchestrator can route the
+    case to its automatic JSON-repair fix pass."""
     p = tmp_path / "broken.json"
     p.write_text("{ this is not json", encoding="utf-8")
     result = subprocess.run(
@@ -816,8 +820,62 @@ def test_cli_unparseable_json_exits_1(tmp_path: Path):
         text=True,
         timeout=10,
     )
-    assert result.returncode == 1
+    assert result.returncode == 4
     assert "not valid JSON" in result.stderr
+
+
+def test_cli_unescaped_inner_quote_exits_4(tmp_path: Path):
+    """The recurring real-world failure: an unescaped double-quote
+    inside a string value (the functional_dark_matter draft_2 failure
+    that motivated v0.7.0.7). Must exit 4 — route to repair, not the
+    schema-failure code 1 — and the hint must mention the orchestrator's
+    automatic repair."""
+    p = tmp_path / "review.json"
+    # The unescaped " around `validates` terminates the issue string
+    # early; everything after it is a JSON syntax error.
+    p.write_text(
+        '{"schema_version": "adversarial-review-presentation.v3", '
+        '"findings": [{"id": "F001", "issue": "a hostile reviewer asks '
+        'how this "validates" the claim"}]}',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(VALIDATOR_PATH), str(p)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 4, (
+        f"unescaped inner quote must exit 4 (route to repair); "
+        f"got {result.returncode}\nstderr:\n{result.stderr}"
+    )
+    assert "not valid JSON" in result.stderr
+    # The hint should point operators at the orchestrator's auto-repair.
+    assert "repair" in result.stderr.lower()
+
+
+def test_cli_trailing_comma_not_exit_4(tmp_path: Path):
+    """Trailing commas are deterministically repairable by the lenient
+    loader (feedback_llm_json_trailing_commas_repairable.md). They must
+    NOT be classified as unparseable (exit 4): the file loads after
+    comma repair, then normal schema validation applies."""
+    p = tmp_path / "review.json"
+    p.write_text(
+        '{"schema_version": "adversarial-review-presentation.v3", '
+        '"findings": [],}',
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(VALIDATOR_PATH), str(p)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode != 4, (
+        f"a trailing comma is repairable and must not be reported as "
+        f"unparseable (exit 4); got {result.returncode}\n"
+        f"stderr:\n{result.stderr}"
+    )
 
 
 def test_cli_validation_failure_exits_1(tmp_path: Path):
@@ -1247,8 +1305,10 @@ def test_cli_lenient_loader_handles_trailing_comma_doc(tmp_path: Path):
 
 def test_cli_unescaped_inner_quote_fails_with_helpful_hint(tmp_path: Path):
     """Unescaped inner quote (the draft_7 failure mode) cannot be
-    repaired and should fail with a helpful hint pointing at the
-    likely cause."""
+    repaired deterministically in the parser, so the validator exits 4
+    (v0.7.0.7 — distinct from schema-failure exit 1) with a helpful
+    hint. Exit 4 is the signal that routes the case to the
+    orchestrator's automatic JSON-repair fix pass."""
     p = tmp_path / "unescaped_quote_review.json"
     # Mimic the draft_7 failure: an unescaped quote inside paragraph_quote
     text = '''{
@@ -1270,7 +1330,11 @@ def test_cli_unescaped_inner_quote_fails_with_helpful_hint(tmp_path: Path):
         [sys.executable, str(VALIDATOR_PATH), str(p)],
         capture_output=True, text=True, timeout=10,
     )
-    assert result.returncode == 1
+    assert result.returncode == 4, (
+        f"unescaped inner quote must exit 4 (route to repair), not the "
+        f"schema-failure code 1; got {result.returncode}\n"
+        f"stderr:\n{result.stderr}"
+    )
     assert "not valid JSON" in result.stderr
     # The hint about unescaped quotes should appear (helps the operator
     # diagnose without context-switching to docs).

@@ -450,12 +450,21 @@ case $EXIT in
     # if they want to debug LLM behavior.
     ;;
   1)
-    # FAIL: non-correctable validation error. Most common cause
-    # is unescaped " inside a JSON string field (per memory
-    # feedback_llm_json_unfixable_in_parser.md). Re-running often
-    # resolves it. The .md may still be useful for human review;
-    # the .json is unsafe for downstream parsing.
-    echo "Adversarial reviewer produced unsafe JSON; re-running" >&2
+    # FAIL: an orchestrator-level hard error (e.g. the fusion path,
+    # or output that failed structural validation). Rare on the
+    # single-reviewer path — as of v0.7.0.7 a bad .json no longer
+    # surfaces here; see exit 4. The .md may still be useful; escalate.
+    echo "Adversarial reviewer hard-failed; manual escalation needed" >&2
+    ;;
+  4)
+    # .json NOT consumer-safe (v0.7.0.7+): the reviewer emitted JSON
+    # that does not parse, and the orchestrator's automatic JSON-repair
+    # pass could not fix it (almost always an unescaped inner double-
+    # quote, per memory feedback_llm_json_unfixable_in_parser.md). The
+    # .md report is intact and usable for human review; the .json must
+    # NOT be parsed. The failure is content-dependent, so one fresh
+    # re-run may produce clean JSON — but do not loop.
+    echo "Adversarial reviewer .json not consumer-safe; one retry" >&2
     beril-adversarial review "$draft_dir" --type paper
     EXIT=$?
     if [[ $EXIT -ne 0 && $EXIT -ne 2 ]]; then
@@ -532,12 +541,21 @@ def adversarial_review(draft_dir):
         # PASS or PASS-with-advisory; .json is consumer-safe
         json_path = draft_dir / "audit" / "adversarial_review.json"
         return json.load(open(json_path))
-    elif result.returncode == 1:
-        # FAIL — non-correctable; one retry, then escalate
+    elif result.returncode == 4:
+        # .json NOT consumer-safe (v0.7.0.7+): the reviewer emitted
+        # unparseable JSON and the orchestrator's automatic JSON-repair
+        # pass could not fix it. The .md is intact; the .json must NOT
+        # be parsed. A fresh re-run may help (content-dependent); do
+        # not loop.
         raise RuntimeError(
-            "Adversarial reviewer produced unsafe JSON; "
-            "see stderr for details. Re-run or escalate."
+            "Adversarial reviewer .json is not consumer-safe "
+            "(unparseable even after auto-repair); see stderr. "
+            "One fresh re-run may help — do not loop."
         )
+    elif result.returncode == 1:
+        # Orchestrator-level hard failure (rare on the single-reviewer
+        # path). Escalate.
+        raise RuntimeError("Adversarial reviewer hard-failed; see stderr.")
     else:  # exit 3 — config error
         raise RuntimeError("beril-adversarial not installed properly")
 
