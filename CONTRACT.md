@@ -101,9 +101,25 @@ Exit codes:
 | Code | Meaning | Consumer policy |
 |---|---|---|
 | 0 | Review completed clean | Use the JSON freely |
-| 1 | User error (bad args, validation failure) | Surface to user; don't retry |
-| 2 | Validator auto-corrected summary mismatches OR advisory warnings | The JSON is consumer-safe; proceed |
+| 1 | User/usage error (bad args, missing BERIL_ROOT) — non-retryable. NOT a validation failure: as of v0.7.0.8 those are exit 4. | Surface to user; don't retry |
+| 2 | Validator auto-corrected summary mismatches OR advisory warnings | The JSON is consumer-safe; proceed (same as exit 0) |
 | 3 | Config error (claude CLI missing, prompt missing) | Surface; user must install/configure |
+| 4 | `.json` NOT consumer-safe — unparseable even after auto-repair (v0.7.0.7), OR parseable but schema-invalid (v0.7.0.8) | Do NOT parse the `.json`; the `.md` is intact. Treat as a hard failure; one fresh re-run may help, don't loop |
+
+**exit 0 and exit 2 are the only consumer-safe codes.** exit 2 is a
+clean review whose summary block the validator rebuilt — the `.json` is
+as safe as exit 0. Any other code (1, 3, 4) means do not consume the
+`.json`.
+
+**Multi-phase consumers:** the exit code is observed where the
+subprocess runs. If JSON consumption happens in a *later* pipeline
+phase, you must propagate the not-consumer-safe signal across the phase
+boundary — quarantine the bad `.json` so the later phase sees it as
+absent, or carry a sentinel it checks. A catch-all `if rc != 0` that
+only *logs* is not enough — catching is not halting. Branch explicitly
+on exit 4, as the worked examples below do. A gate that guards only
+against an *unparseable* file will still mis-consume a schema-invalid
+(exit-4) one.
 
 The wrapper is a thin Python delegation to `tools/adversarial_review.sh`;
 exit codes propagate through unchanged.
@@ -458,8 +474,9 @@ case $EXIT in
     echo "Adversarial reviewer hard-failed; manual escalation needed" >&2
     ;;
   4)
-    # .json NOT consumer-safe. As of v0.7.0.8, exit 0 is the ONLY code
-    # that means consumer-safe; exit 4 means it is not. Two causes:
+    # .json NOT consumer-safe. As of v0.7.0.8, exit 0 and exit 2 are
+    # the only codes that mean consumer-safe; exit 4 means it is not.
+    # Two causes:
     #   (a) the .json does not parse and the orchestrator's automatic
     #       JSON-repair pass could not fix it (v0.7.0.7 — almost always
     #       an unescaped inner double-quote, per memory

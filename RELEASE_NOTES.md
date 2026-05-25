@@ -53,6 +53,18 @@ consumer call patterns are updated: exit 4's description now covers
 both causes, and exit 0/2 is called out as the only consumer-safe
 signal.
 
+Post-review correction (paper-writer team, reviewing against their
+v1.0.1 / D-054 consumer fix): the CONTRACT.md exit-code table was
+completed — it had never listed exit 4, and exit 1 still claimed to
+cover "validation failure" (those are exit 4 now) — and a
+self-contradiction was fixed (one consumer-example comment said exit 0
+alone was consumer-safe; exit 2 is equally safe). A multi-phase-consumer
+note was added: catching exit 4 at the subprocess call site is not the
+same as halting on it — a consumer whose JSON consumption is in a later
+pipeline phase must propagate the not-consumer-safe signal across the
+phase boundary (quarantine the bad file, or carry a sentinel), not rely
+on a catch-all that only logs.
+
 ### Testing
 
 209 tests pass (was 208). New test: a missing `summary` block is
