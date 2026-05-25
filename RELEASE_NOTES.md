@@ -2,6 +2,44 @@
 
 ---
 
+## v0.7.0.9 — 2026-05-25 (docs — CONTRACT.md exit-code contract corrections)
+
+**Docs-only.** No code change — the exit-4 behavior shipped in v0.7.0.7
+/ v0.7.0.8 is unchanged. This corrects CONTRACT.md after the
+paper-writer team reviewed the exit-code contract against their v1.0.1
+consumer fix (D-054) and found it inconsistent.
+
+Three CONTRACT.md fixes:
+
+- **Exit-code table completed.** The table never listed exit 4 (stale
+  since v0.7.0.7), and exit 1's description still claimed to cover
+  "validation failure" — false as of v0.7.0.8, where validation
+  failures surface as exit 4. The table now lists 0/1/2/3/4, with exit
+  1 as user/usage error only (non-retryable).
+- **Self-contradiction fixed.** A bash consumer-example comment said
+  exit 0 *alone* was consumer-safe, while the table and the Python
+  example correctly say exit 0 AND exit 2 — a copy-paste had dropped
+  the "/2". Exit 2 (a clean review with a validator-rebuilt summary)
+  is as consumer-safe as exit 0. This is load-bearing: it decides
+  whether a consumer uses or discards an auto-corrected review.
+- **Multi-phase-consumer note added.** Catching exit 4 at the
+  subprocess call site is not the same as halting on it. A consumer
+  whose reviewer invocation and JSON consumption sit in different
+  pipeline phases must propagate the not-consumer-safe signal across
+  the phase boundary (quarantine the bad `.json`, or carry a sentinel)
+  — a catch-all `if rc != 0` that only logs is not enough. The
+  paper-writer team hit exactly this; their v1.0.1 ships the
+  quarantine + fallback fix. The earlier cross-team note's claim that
+  an exit-4 branch was "a messaging fix, not a correctness fix" was
+  wrong for multi-phase consumers and is retracted.
+
+CONTRACT.md is a repo document — it is not shipped in the wheel, so no
+re-install is needed for the doc fix itself. (Re-install is still
+required for anyone not yet on the v0.7.0.7 / v0.7.0.8 code.) Consumers
+should re-read the exit-code section.
+
+---
+
 ## v0.7.0.8 — 2026-05-25 (exit-code honesty — a schema-invalid .json also exits 4)
 
 **Follow-on to v0.7.0.7.** v0.7.0.7 made an *unparseable* `.json` exit 4
@@ -52,18 +90,6 @@ v0.7.0.7 cross-team note) needs no change. CONTRACT.md's documented
 consumer call patterns are updated: exit 4's description now covers
 both causes, and exit 0/2 is called out as the only consumer-safe
 signal.
-
-Post-review correction (paper-writer team, reviewing against their
-v1.0.1 / D-054 consumer fix): the CONTRACT.md exit-code table was
-completed — it had never listed exit 4, and exit 1 still claimed to
-cover "validation failure" (those are exit 4 now) — and a
-self-contradiction was fixed (one consumer-example comment said exit 0
-alone was consumer-safe; exit 2 is equally safe). A multi-phase-consumer
-note was added: catching exit 4 at the subprocess call site is not the
-same as halting on it — a consumer whose JSON consumption is in a later
-pipeline phase must propagate the not-consumer-safe signal across the
-phase boundary (quarantine the bad file, or carry a sentinel), not rely
-on a catch-all that only logs.
 
 ### Testing
 
