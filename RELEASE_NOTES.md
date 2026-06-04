@@ -2,6 +2,26 @@
 
 ---
 
+## v0.7.0.10 — 2026-06-03 (docs — terminology + URL migration)
+
+**Docs-only.** No code change.
+
+- README: "BERDL analysis projects" → "BERIL analysis projects"
+  (the co-scientist's preferred term; data layer is "KBase
+  Lakehouse").
+- README cross-skill links: sister-skill repos migrated from
+  `ArkinLaboratory` to `kbaseincubator`. Affects the
+  PARTICIPANT-RUNBOOK link + the install hint URLs.
+
+This release exists because the repo transferred to
+`kbaseincubator` on 2026-06-03 and the README needed updated
+URLs to match. Bundled with the BERDL→BERIL terminology pass.
+
+CRAFT submodule pin bumps from v0.7.0.9 → v0.7.0.10 in CRAFT
+v0.2.2.
+
+---
+
 ## v0.7.0.9 — 2026-05-25 (docs — CONTRACT.md exit-code contract corrections)
 
 **Docs-only.** No code change — the exit-4 behavior shipped in v0.7.0.7

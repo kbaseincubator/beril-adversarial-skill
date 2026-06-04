@@ -1,6 +1,6 @@
 # beril-adversarial-skill
 
-A harsh, detail-oriented adversarial reviewer for BERDL analysis projects,
+A harsh, detail-oriented adversarial reviewer for BERIL analysis projects,
 research plans, paper drafts, and presentation drafts. Distributed as a
 Claude Code skill that runs inside a BERIL deployment.
 
@@ -72,7 +72,7 @@ flat-file rejected with migration message).
 | **[RELEASE_NOTES.md](RELEASE_NOTES.md)** | Anyone tracking changes | Version-by-version changelog from v0.4.x → v0.7.x with migration notes per release. |
 | **[LAYOUT.md](LAYOUT.md)** | Maintainer | Directory and file organization. |
 | **[SCHEMA_V3_DECISIONS.md](SCHEMA_V3_DECISIONS.md)** | Schema designer / consumer wanting design rationale | Why v3 looks the way it does; D1-D6, C1-C3, G1-G5 implementation contracts. |
-| Cross-skill: **[PARTICIPANT-RUNBOOK.md](https://github.com/ArkinLaboratory/beril-presentation-maker-skill/blob/main/docs/cross-skill/PARTICIPANT-RUNBOOK.md)** | Researcher using ANY of the 4 BERIL plug-in skills (paper-writer / presentation-maker / adversarial / atlas) | Hub workflow integration (`/berdl_start` → install → configure → run any skill), recovery, cost. |
+| Cross-skill: **[PARTICIPANT-RUNBOOK.md](https://github.com/kbaseincubator/beril-presentation-maker-skill/blob/main/docs/cross-skill/PARTICIPANT-RUNBOOK.md)** | Researcher using ANY of the 4 BERIL plug-in skills (paper-writer / presentation-maker / adversarial / atlas) | Hub workflow integration (`/berdl_start` → install → configure → run any skill), recovery, cost. |
 | Reference: [PLUGIN_GUIDE.md](PLUGIN_GUIDE.md) | Reader who wants the full story in one doc | Comprehensive single-doc reference. Per the May 2026 cross-skill doc-consistency agreement, this is no longer a target for new writing — granular docs above are canonical. Kept for completeness. |
 | Historical: [SCHEMA_V2_DECISIONS.md](SCHEMA_V2_DECISIONS.md), [SCHEMA_V2_PAPER_DECISIONS.md](SCHEMA_V2_PAPER_DECISIONS.md), [SPEC_TYPE_PRESENTATION.md](SPEC_TYPE_PRESENTATION.md), [V0_4_0_PUNCH_LIST.md](V0_4_0_PUNCH_LIST.md) | Archaeology — design rationale for older releases | Each carries a HISTORICAL banner pointing at the current canonical doc. |
 
@@ -261,7 +261,7 @@ logic.
 # Run from BERIL_ROOT. Steps in order: install package → verify CLI loads →
 # configure cross-skill bindings → deploy skill files into BERIL.
 cd <BERIL_ROOT>
-pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git \
+pipx install --force git+https://github.com/kbaseincubator/beril-adversarial-skill.git \
   && beril-adversarial --version \
   && beril-adversarial configure \
   && beril-adversarial install-skill .
@@ -274,7 +274,7 @@ If you have an SSH key registered with the ArkinLaboratory GitHub org, the
 SSH URL also works (and avoids needing a credential helper):
 
 ```bash
-pipx install --force git+ssh://git@github.com/ArkinLaboratory/beril-adversarial-skill.git
+pipx install --force git+ssh://git@github.com/kbaseincubator/beril-adversarial-skill.git
 ```
 
 The `git@` is mandatory — `git+ssh://github.com/...` (without it) fails
