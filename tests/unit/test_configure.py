@@ -309,7 +309,57 @@ def test_validation_ping_rejects_generic_greeting_at_exit_zero(tmp_path):
     ):
         ok, body = configure.validation_ping("opus-4-8", beril_root=tmp_path)
     assert ok is False
-    assert "no 'ok' token" in body
+    assert "response was not 'ok'" in body
+
+
+def test_validation_ping_rejects_okay_greeting(tmp_path):
+    """Round-1 regression: substring match false-passes on a greeting
+    that begins with "Okay,". Equality-after-normalize must reject it."""
+
+    def fake_run(*args, **kwargs):
+        return _FakeCompleted(
+            0,
+            stdout="Okay, what would you like to do?",
+        )
+
+    with (
+        mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(configure.subprocess, "run", fake_run),
+    ):
+        ok, body = configure.validation_ping("opus-4-8", beril_root=tmp_path)
+    assert ok is False
+    assert "response was not 'ok'" in body
+
+
+def test_validation_ping_accepts_uppercase_ok_with_trailing_period(tmp_path):
+    """`OK.` (uppercase + trailing punctuation) is still a clean
+    canonical-token reply — the normalize step strips both."""
+
+    def fake_run(*args, **kwargs):
+        return _FakeCompleted(0, stdout="OK.")
+
+    with (
+        mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(configure.subprocess, "run", fake_run),
+    ):
+        ok, body = configure.validation_ping("claude-opus-4-7", beril_root=tmp_path)
+    assert ok is True
+    assert "OK" in body
+
+
+def test_validation_ping_accepts_bare_ok(tmp_path):
+    """Bare `ok` (no punctuation) is the canonical happy path."""
+
+    def fake_run(*args, **kwargs):
+        return _FakeCompleted(0, stdout="ok")
+
+    with (
+        mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(configure.subprocess, "run", fake_run),
+    ):
+        ok, body = configure.validation_ping("claude-opus-4-7", beril_root=tmp_path)
+    assert ok is True
+    assert body == "ok"
 
 
 def test_validation_ping_handles_nonzero_exit(tmp_path):

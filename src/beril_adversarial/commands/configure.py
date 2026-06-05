@@ -40,6 +40,7 @@ import datetime as _dt
 import json
 import os
 import shutil
+import string
 import subprocess
 import sys
 import urllib.error
@@ -295,13 +296,15 @@ def validation_ping(
     beril_root: Path,
     timeout: float = DEFAULT_PING_TIMEOUT,
 ) -> tuple[bool, str]:
-    """Ask `claude -p` to reply exactly with `ok`; assert `ok` is in the response.
+    """Ask `claude -p` to reply exactly with `ok`; assert the response IS `ok`.
 
     Returns (success, response_text). Success means the subprocess exited 0
-    AND the response (case-insensitive, whitespace-stripped) contains the
-    token `ok`. An invalid model returns a generic greeting at exit 0 on
-    CBORG — exit-code-only validation is unsafe (contract requires the
-    response check).
+    AND the response, lowercased + stripped of surrounding whitespace and
+    punctuation, EQUALS the token `ok` (not a substring match — a substring
+    match false-passes on greetings like "Okay, what would you like to do?",
+    defeating the response-validation the contract requires). An invalid
+    model returns a generic greeting at exit 0 on CBORG; exit-code-only
+    validation is unsafe (contract §3.4 req 3.2).
 
     Runs with `cwd=beril_root` so Claude Code finds `<root>/.claude/settings.json`
     via its native cwd-walk-up.
@@ -330,11 +333,12 @@ def validation_ping(
     if completed.returncode != 0:
         return False, f"(exit {completed.returncode}) {body.strip()[:400]}"
     # Response-validation: an unresolved model on CBORG returns a generic
-    # greeting at exit 0. Require a substring match against the asserted
-    # token, not just exit-0.
-    stripped = body.strip().lower()
-    if "ok" not in stripped:
-        return False, f"(no 'ok' token in response) {body.strip()[:400]}"
+    # greeting at exit 0. EQUALITY against the canonical token (not
+    # substring) — a substring match false-passes on "Okay, what would
+    # you like to do?", which contains "ok".
+    stripped = body.strip().lower().strip(string.punctuation + string.whitespace)
+    if stripped != "ok":
+        return False, f"(response was not 'ok') {body.strip()[:400]}"
     return True, body.strip()[:400]
 
 
