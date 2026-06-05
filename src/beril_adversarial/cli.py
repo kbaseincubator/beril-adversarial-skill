@@ -35,6 +35,7 @@ from beril_adversarial.commands import (
     configure,
     install_skill,
     review,
+    template_env,
 )
 
 
@@ -57,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     install_skill.add_parser(subparsers)
     configure.add_parser(subparsers)
     review.add_parser(subparsers)
+    template_env.add_parser(subparsers)
 
     return p
 
