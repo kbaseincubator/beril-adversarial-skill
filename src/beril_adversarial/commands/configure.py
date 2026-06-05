@@ -420,6 +420,13 @@ def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParse
 
 
 def run(args: argparse.Namespace) -> int:
+    # All optional flags are read via getattr so programmatic callers
+    # constructing a bare Namespace (e.g., other skills' orchestrators,
+    # tests) can't AttributeError on a missing attribute.
+    no_discover = getattr(args, "no_discover", False)
+    no_ping = getattr(args, "no_ping", False)
+    yes = getattr(args, "yes", False)
+
     # 1. Resolve BERIL_ROOT.
     try:
         beril_root = discovery.find_beril_root(explicit=getattr(args, "beril_root", None))
@@ -464,7 +471,7 @@ def run(args: argparse.Namespace) -> int:
     provider = llm_config.infer_provider(env_map)
     print(f"  [OK] ACTIVE_PROVIDER (resolved): {provider}")
     available: list[str] | None = None
-    if not args.no_discover:
+    if not no_discover:
         available = query_provider_models(provider, env_map)
         if available is not None:
             print(f"  [OK] provider serves {len(available)} model id(s)")
@@ -477,7 +484,7 @@ def run(args: argparse.Namespace) -> int:
     # 4a. Handle unresolved tiers per contract:
     #     interactive → picker; non-interactive → fail loud.
     if resolved.unresolved_tiers:
-        if args.yes or available is None or not sys.stdin.isatty():
+        if yes or available is None or not sys.stdin.isatty():
             print(
                 f"  [ERROR] unresolved tier(s): {', '.join(resolved.unresolved_tiers)}",
                 file=sys.stderr,
@@ -548,7 +555,7 @@ def run(args: argparse.Namespace) -> int:
         print(f"  [OK] .gitignore already covers {GITIGNORE_LINE!r}")
 
     # 6. Validation ping (req 3.2 — response, not exit code).
-    if args.no_ping:
+    if no_ping:
         print("  [skip] validation ping (--no-ping)")
     else:
         reasoning_model = resolved.tier_models.get("reasoning")

@@ -515,3 +515,60 @@ def test_resolve_unresolved_interactively_skips_when_no_candidates(capsys):
     assert picks == {"reasoning": "claude-opus-4-7"}
     err = capsys.readouterr().err
     assert "no haiku-class model" in err
+
+
+# ---------------------------------------------------------------------------
+# configure.run robustness — programmatic callers must not AttributeError
+# ---------------------------------------------------------------------------
+
+
+def test_run_reads_optional_flags_via_getattr(tmp_path, monkeypatch):
+    """`configure.run` MUST read `no_discover`, `no_ping`, and `yes` via
+    getattr so a programmatic caller (e.g. install-skill on an older
+    install, an orchestrator from another skill) constructing a bare
+    Namespace can't AttributeError on a missing attribute.
+
+    The Hub crash that motivated this fix:
+      install_skill.run called configure.run with
+      argparse.Namespace(beril_root=..., json=False) — no no_discover,
+      no no_ping, no yes. configure.run did `if not args.no_discover`
+      which raised AttributeError mid-install.
+    """
+    # Build a minimal marker-valid BERIL root so discovery succeeds.
+    root = tmp_path / "synthetic"
+    root.mkdir()
+    (root / ".env").write_text("# synthetic\n")
+    skills = root / ".claude" / "skills"
+    skills.mkdir(parents=True)
+    for name in ("submit", "berdl", "suggest-research"):
+        d = skills / name
+        d.mkdir()
+        (d / "SKILL.md").write_text(f"# {name}\n")
+
+    # Patch the I/O surfaces so the test stays fast + offline:
+    # - which("claude") → pretend it's there
+    # - model-list query → return None (forces resolved/unresolved path)
+    # - sys.stdin.isatty → False (non-interactive; fails loud on unresolved)
+    monkeypatch.setattr(configure.shutil, "which", lambda _: "/bin/claude")
+    monkeypatch.setattr(configure, "query_provider_models", lambda *_a, **_k: None)
+    monkeypatch.setattr(configure.sys.stdin, "isatty", lambda: False)
+
+    import argparse as _ap
+
+    # The minimal Namespace a non-CLI caller might construct.
+    bare_args = _ap.Namespace(beril_root=str(root))
+
+    # Must not raise AttributeError — that is the regression this guards.
+    try:
+        rc = configure.run(bare_args)
+    except AttributeError as exc:
+        raise AssertionError(
+            f"configure.run AttributeError'd on a bare Namespace: {exc}. "
+            "All optional flags must be read via getattr with a False default."
+        ) from exc
+
+    # rc is allowed to be any of the defined exit codes — what we're
+    # pinning here is the NO-ATTRIBUTEERROR contract, not a specific
+    # outcome. (With no env keys and no discovery, the unresolved-tier
+    # path fires and returns 1; that's fine.)
+    assert isinstance(rc, int)
