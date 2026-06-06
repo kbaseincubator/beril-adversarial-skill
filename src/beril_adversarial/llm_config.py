@@ -34,8 +34,7 @@ TIER_ENV = {
     "standard": "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "fast": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
 }
-TIER_ENVKEY = {"reasoning": "MODEL_REASONING", "standard": "MODEL_STANDARD",
-               "fast": "MODEL_FAST"}
+TIER_ENVKEY = {"reasoning": "MODEL_REASONING", "standard": "MODEL_STANDARD", "fast": "MODEL_FAST"}
 
 
 class ConfigError(ValueError):
@@ -56,9 +55,7 @@ def infer_provider(env: dict[str, str]) -> str:
     explicit = _val(env, "ACTIVE_PROVIDER").lower()
     if explicit:
         if explicit not in PROVIDERS:
-            raise ConfigError(
-                f"ACTIVE_PROVIDER={explicit!r} invalid; one of {PROVIDERS}"
-            )
+            raise ConfigError(f"ACTIVE_PROVIDER={explicit!r} invalid; one of {PROVIDERS}")
         return explicit
     if _val(env, "CBORG_API_KEY"):
         return "cborg"
@@ -76,6 +73,19 @@ def bare_host(env: dict[str, str]) -> str:
     """
     raw = _val(env, "CBORG_BASE_URL") or CBORG_BARE_HOST
     return re.sub(r"/v1/?$", "", raw.rstrip("/"))
+
+
+def app_internal_base_url(env: dict[str, str]) -> str:
+    """OpenAI-style CBORG base URL for app-internal clients (KEEPS `/v1`).
+
+    Symmetric with `bare_host`: both derive from the one user-facing
+    `CBORG_BASE_URL`, so the app-internal client (OpenAI-style, needs `/v1`)
+    and `claude -p` (Anthropic-style, needs the bare host) can never disagree.
+    Defined as `bare_host(env) + "/v1"`, so a user who writes EITHER the bare
+    host OR the `/v1` form gets exactly one `/v1` for app-internal calls.
+    CRAFT-CONTRACT §3.4 ("the base URL differs by client").
+    """
+    return bare_host(env) + "/v1"
 
 
 def _version_key(model_id: str) -> tuple:
@@ -102,11 +112,11 @@ def pick_newest(available: list[str], family: str) -> str | None:
 @dataclass
 class ResolvedConfig:
     provider: str
-    base_url: str | None            # None for anthropic/subscription
-    secret_env: dict[str, str]      # -> settings.local.json (gitignored)
-    public_env: dict[str, str]      # -> settings.json (safe to commit)
-    tier_models: dict[str, str]     # tier -> concrete pinned model id
-    unresolved_tiers: list[str] = field(default_factory=list)   # need discovery/user pick
+    base_url: str | None  # None for anthropic/subscription
+    secret_env: dict[str, str]  # -> settings.local.json (gitignored)
+    public_env: dict[str, str]  # -> settings.json (safe to commit)
+    tier_models: dict[str, str]  # tier -> concrete pinned model id
+    unresolved_tiers: list[str] = field(default_factory=list)  # need discovery/user pick
     warnings: list[str] = field(default_factory=list)
 
 
