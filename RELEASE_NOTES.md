@@ -2,6 +2,57 @@
 
 ---
 
+## v0.7.1 — 2026-06-06 (CRAFT runtime-config standardization — §3.4)
+
+**Coordinated CRAFT release.** Adversarial is the canary skill of the
+runtime-config arc; this release ships the standardized config model
+agreed in CRAFT-CONTRACT.md §3.4 (runtime configuration contract v2).
+No schema change, no behavioral change to review output.
+
+**What's new (operational, not schema-level):**
+
+- **Provider abstraction.** `ACTIVE_PROVIDER ∈ {anthropic, cborg,
+  subscription}` selects the reasoning backend for both `claude -p` and
+  any future app-internal calls. If `ACTIVE_PROVIDER` is unset it is
+  **inferred** for backward compatibility (`CBORG_API_KEY` present →
+  `cborg`; `ANTHROPIC_API_KEY` present → `anthropic`; neither →
+  `subscription`).
+- **Three model tiers.** `MODEL_REASONING` / `MODEL_STANDARD` /
+  `MODEL_FAST` replace per-stage model env vars. The skill's `.sh`
+  orchestrator routes through Claude Code's native `--model` aliases
+  (opus / sonnet / haiku) resolved against
+  `<BERIL_ROOT>/.claude/settings.json` written by `configure`.
+- **`configure` as CRAFT-bootstrap.** `beril-adversarial configure`
+  is now the runtime-config bootstrap: read `.env`, discover the
+  provider's model list, pin tier models (interactive picker for
+  unresolved tiers on a TTY; fail-loud non-interactive), write
+  `settings.{json,local.json}` (secret split), run a response-asserting
+  validation ping against the reasoning tier with auto-fallback if the
+  pin fails.
+- **Additive-only `.env`.** The shared CRAFT block + per-skill marker
+  are appended idempotently; existing keys (credentials, tier pins) are
+  **never re-declared** — re-declaration would shadow values BERIL and
+  other processes already set. The `parse_env_text` helper strips
+  inline `#` comments from unquoted values.
+- **`app_internal_base_url()` canonical helper** (Stage 6) — symmetric
+  `/v1`-keeping sibling of `bare_host`. Verbatim in the canonical
+  `llm_config.py` copy across all CRAFT skills for cross-skill
+  conformance parity (CI-enforced via the craft-platform conformance
+  fixture).
+
+**Backward compatibility.** Explicitly preserved: an old-style `.env`
+that only sets `CBORG_API_KEY` (no `ACTIVE_PROVIDER`, no `MODEL_*`)
+upgrades cleanly — `infer_provider` returns `cborg`,
+`compose_env_append` does NOT re-declare `CBORG_API_KEY` (it's read,
+never written), and discovery pins the tier models. Pinned by
+`test_old_style_env_upgrades_cleanly` in `tests/test_llm_config.py`.
+
+**References.** `CRAFT-CONTRACT.md §3.4` for the contract;
+`handoffs/CRAFT-config-stage2-CC-brief.md` for the canary design
+notes that landed in Stage 2.
+
+---
+
 ## v0.7.0.10 — 2026-06-03 (docs — terminology + URL migration)
 
 **Docs-only.** No code change.
