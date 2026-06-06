@@ -16,6 +16,7 @@ The hub user environment must have:
 2. **`claude` CLI** — Anthropic's Claude Code on PATH. The orchestrator invokes `claude -p` per review.
 3. **Read access to `BERIL_ROOT/projects/`** — at least one project with `REPORT.md` (and ideally `RESEARCH_PLAN.md`, plus `papers/` or `talks/` subdirectories if you'll be reviewing drafts).
 4. **Optional but recommended: `codex` CLI** — for `--reviewer codex` and `--reviewer claude,codex` fusion. Fusion in v0.7.x only applies to legacy `--type project|plan` modes; paper/presentation v3 fusion ships in v0.7.1.
+5. **A provider credential in `<BERIL_ROOT>/.env`** for `claude -p` reasoning — `CBORG_API_KEY` (LBL/KBase, via CBORG), `ANTHROPIC_API_KEY` (direct Anthropic), or none (the `subscription` fallback uses ambient Claude Code login). `configure` reads it from `.env`; you don't `export` it.
 
 Verify each:
 
@@ -37,7 +38,7 @@ If `claude` is missing, install Claude Code per Anthropic's docs. The skill cann
 From any cwd:
 
 ```bash
-pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git
+pipx install --force git+https://github.com/kbaseincubator/beril-adversarial-skill.git
 ```
 
 Alternative URL forms:
@@ -45,25 +46,25 @@ Alternative URL forms:
 - **SSH (requires registered SSH key):**
 
   ```bash
-  pipx install --force git+ssh://git@github.com/ArkinLaboratory/beril-adversarial-skill.git
+  pipx install --force git+ssh://git@github.com/kbaseincubator/beril-adversarial-skill.git
   ```
 
 - **Specific version (recommended for production / reproducible deployments):**
 
   ```bash
-  pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git@v0.7.0.3
+  pipx install --force git+https://github.com/kbaseincubator/beril-adversarial-skill.git@v0.7.1
   ```
 
 - **From a wheel file (offline / pinned):**
 
   ```bash
-  pipx install --force /path/to/beril_adversarial_skill-0.7.0.3-py3-none-any.whl
+  pipx install --force /path/to/beril_adversarial_skill-0.7.1-py3-none-any.whl
   ```
 
 Verify the install:
 
 ```bash
-beril-adversarial --version    # should print 0.7.0.3 or later
+beril-adversarial --version    # should print 0.7.1 or later
 ```
 
 If `pipx` warns about PATH, run `pipx ensurepath` once and start a new shell.
@@ -102,34 +103,38 @@ ls "$BERIL_ROOT/.claude/skills/beril-adversarial/prompts/"
 
 If you see `adversarial_paper.v2.md` or `adversarial_presentation.v2.md` in the prompts directory, the install is from a pre-v0.7.0 release. Re-run `pipx install --force` followed by `install-skill` to refresh.
 
-### Step 3 — Configure (verify dependencies)
+### Step 3 — Configure (bootstrap CRAFT runtime config)
 
 ```bash
-beril-adversarial configure
+beril-adversarial configure "$BERIL_ROOT"     # or omit the path to auto-discover
 ```
 
-This subcommand:
+`configure` is the one command that makes a deployment ready to run reviews: it wires `claude -p` to a CRAFT-contracted LLM provider and confirms the wiring works *before* your first review. It is no longer just a dependency check. In order, it:
 
-- Confirms `claude` is on PATH and reports the path.
-- Confirms `codex` is on PATH (optional; reports `[OK]` if present, `[FAIL]` if not, but `[FAIL]` here is non-blocking).
-- Confirms the deployed skill subtree is at the expected location under `<BERIL_ROOT>/.claude/skills/beril-adversarial/`.
-- Reports the BERIL_ROOT it auto-discovered.
-- Does NOT make any LLM calls — this is a fast pre-flight check.
+1. **Resolves BERIL_ROOT** — the positional argument, or a discovery walk-up from the current directory if you omit it.
+2. **Extends `<BERIL_ROOT>/.env`** with the CRAFT shared-config block + this skill's per-skill marker — additively and idempotently. It never re-declares a key your `.env` already holds, so it is safe to run against the shared BERIL `.env`.
+3. **Selects the provider** — `ACTIVE_PROVIDER` ∈ `anthropic | cborg | subscription`. If unset, it is inferred from the keys already in your `.env`: a `CBORG_API_KEY` implies `cborg`, an `ANTHROPIC_API_KEY` implies `anthropic`, neither implies `subscription` (ambient Claude Code login).
+4. **Resolves the three model tiers** (`reasoning` / `standard` / `fast`). A tier you pin in `.env` (`MODEL_REASONING` / `MODEL_STANDARD` / `MODEL_FAST`) wins; an unpinned tier is filled by querying the provider's live model list. On a terminal, any tier it can't resolve prompts you to pick from the served candidates; with `--yes` or no TTY, an unresolved tier **fails loud** rather than guessing a default.
+5. **Writes the Claude Code settings** Claude Code reads to route `claude -p`: `<BERIL_ROOT>/.claude/settings.json` (provider base URL + the pinned per-tier model ids — safe to commit) and `settings.local.json` (the secret token — gitignored, mode `600`). The local file is added to `.gitignore` automatically.
+6. **Runs a validation ping** — a real `claude -p` call against the reasoning tier that asserts the reply is exactly `ok`. This is the load-bearing check: a wrong CBORG model id doesn't error, it answers at exit 0 with a chatty greeting, so an exit-code-only check would false-pass. The ping tests that the config it just resolved actually works.
+7. **Stamps** `BERIL_ADVERSARIAL_CONFIGURED_AT` / `_VERSION` into `.env` on success.
 
-Expected output:
+Flags:
 
-```
-beril-adversarial-skill v0.7.0.3
-  BERIL_ROOT: /home/youruser/BERIL-research-observatory
-  [OK]      claude — /home/youruser/.local/bin/claude
-  [OK]      codex  — /home/youruser/.npm-global/bin/codex  (enables --reviewer codex/claude,codex)
-```
+- `--no-discover` — resolve tiers from `.env` pins only; skip the model-list query (offline, or when you've pinned every tier).
+- `--no-ping` — skip the validation ping (offline, or before a token is in place).
+- `--yes` / `-y` — non-interactive: never prompt; fail loud on any unresolved tier (for CI / scripted runs).
 
-If any check fails, fix it and re-run. Common issues:
+Exit codes: `0` success · `1` a write/ping failure or user abort · `3` `claude` not on PATH or BERIL_ROOT unresolvable.
 
-- **`[FAIL]` claude:** install Claude Code per Anthropic's docs; verify with `which claude`. The skill cannot run reviews without it.
-- **`[FAIL]` codex:** non-blocking. Fusion (`--reviewer claude,codex`) won't work, but single-reviewer mode (the default) works fine without it.
-- **"BERIL_ROOT does not contain `.claude/skills/`":** you're not in a BERIL fork, or the auto-detected path is wrong. Re-run with `beril-adversarial install-skill <correct-path>`.
+**Provider note.** The adversarial reviewer has no image generation and makes no app-internal API calls, but its review *reasoning* runs through `claude -p`, so the provider matters: under `cborg`, `claude -p` authenticates with your CBORG token (written to `settings.local.json`); under `anthropic`, with `ANTHROPIC_API_KEY`; under `subscription`, with your ambient Claude Code login (capped by the monthly Agent SDK credit after 2026-06-15). If a credential the chosen provider needs is missing, `configure` fails loud and names it.
+
+If a check fails, fix it and re-run — `configure` is idempotent. Common cases:
+
+- **`claude` not on PATH (exit 3):** install Claude Code per Anthropic's docs; verify with `which claude`. The skill cannot run reviews without it.
+- **An unresolved tier on `--yes` / no TTY:** the provider serves no model for that family, or your pin isn't served. Re-run on a terminal to pick interactively, or pin `MODEL_<TIER>` in `.env`.
+- **Ping fails with a non-`ok` reply:** the resolved model answered but not with `ok` — usually a wrong/renamed model id for that tier. Re-pin the tier (interactively, or in `.env`) and re-run.
+- **"cannot resolve BERIL_ROOT":** pass it positionally (`beril-adversarial configure /path/to/BERIL-research-observatory`) or `cd` into the deployment first.
 
 ## First-run validation
 
@@ -202,10 +207,10 @@ If the agent uses the wrong project (e.g., infers from a stale branch), pass the
 Re-run pipx install with the new version tag:
 
 ```bash
-pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git@v0.7.0.3   # or any later v0.7.x.y tag
+pipx install --force git+https://github.com/kbaseincubator/beril-adversarial-skill.git@v0.7.1   # or any later v0.7.x tag
 beril-adversarial install-skill "$BERIL_ROOT"   # refresh skill files
 beril-adversarial --version                      # confirm
-beril-adversarial configure                      # verify deps still resolve
+beril-adversarial configure "$BERIL_ROOT"        # re-bootstrap CRAFT config (idempotent)
 ```
 
 The skill files in `<BERIL_ROOT>/.claude/skills/beril-adversarial/` get refreshed to match the new package version. Existing audit JSONs under `projects/<id>/papers/draft_N/audit/` are forward-compatible — v2 schema docs continue to be readable by v0.7.0+ validators (with a deprecation warning).
@@ -230,7 +235,7 @@ This removes the CLI and the skill files. Existing audit files under `projects/<
 The deployed skill is stale (from a pre-v0.7.0 release that didn't have v3 prompts). Refresh:
 
 ```bash
-pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git
+pipx install --force git+https://github.com/kbaseincubator/beril-adversarial-skill.git
 beril-adversarial install-skill "$BERIL_ROOT"
 ```
 
@@ -296,7 +301,7 @@ Expected behavior. v2 schema acceptance is preserved for forensic compatibility 
 
 ## Hub-specific notes
 
-- **No image-gen dependency:** unlike `beril-presentation-maker`, the adversarial reviewer doesn't generate images and doesn't need a `CBORG_API_KEY`. It runs purely on text via Claude Code.
+- **No image-gen dependency:** unlike `beril-presentation-maker`, the adversarial reviewer generates no images and makes no app-internal API calls. Its review *reasoning* still runs through `claude -p`, so it uses whatever provider `configure` wired: under `cborg`, the `CBORG_API_KEY` from `settings.local.json`; under `anthropic`, `ANTHROPIC_API_KEY`; under `subscription`, ambient Claude Code login. There is no separate per-skill credential to manage.
 - **Per-user storage:** all audit output lives under `<BERIL_ROOT>/projects/<id>/{papers,talks}/draft_<N>/audit/` in the user's BERIL working tree, not in `~/.beril-*` or any user-level state. Multiple users on the same hub stay isolated.
 - **Concurrency:** running multiple parallel reviews against the same draft will overwrite output unless you use `--output <basename>` to differentiate. Project / plan modes auto-number output files race-safely.
 - **Resumability:** the reviewer is single-pass; it doesn't have a resume mode. If a run fails partway through, simply re-run it.
@@ -308,7 +313,7 @@ Expected behavior. v2 schema acceptance is preserved for forensic compatibility 
 |---|---|
 | `beril-adversarial --version` | Sanity check |
 | `beril-adversarial install-skill <BERIL_ROOT>` | One-time per hub deployment + after each pipx upgrade |
-| `beril-adversarial configure` | One-time per hub deployment + after env changes (e.g., new claude install) |
+| `beril-adversarial configure [<BERIL_ROOT>]` | Bootstrap/refresh CRAFT runtime config (provider, tier models, `settings.json` + validation ping); re-run after `.env` or provider changes |
 | `beril-adversarial review --type paper <draft_dir>` | Pre-ship paper audit |
 | `beril-adversarial review --type presentation <draft_dir>` | Pre-presentation deck audit |
 | `beril-adversarial review --type project <project_id>` | Top-to-bottom project skepticism pass |

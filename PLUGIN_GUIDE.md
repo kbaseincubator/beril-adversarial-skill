@@ -4,7 +4,7 @@
 > - **[TUTORIAL.md](TUTORIAL.md)** — researcher using the reviewer (skill-specific; defers cross-skill flow to PARTICIPANT-RUNBOOK).
 > - **[HUB_INSTALL.md](HUB_INSTALL.md)** — operator deploying on JupyterHub.
 > - **[CONTRACT.md](CONTRACT.md)** — integrator consuming the JSON output.
-> - **[PARTICIPANT-RUNBOOK.md](https://github.com/ArkinLaboratory/beril-presentation-maker-skill/blob/main/docs/cross-skill/PARTICIPANT-RUNBOOK.md)** — cross-skill participant flow across all 4 BERIL plug-in skills.
+> - **[PARTICIPANT-RUNBOOK.md](https://github.com/kbaseincubator/beril-presentation-maker-skill/blob/main/docs/cross-skill/PARTICIPANT-RUNBOOK.md)** — cross-skill participant flow across all 4 BERIL plug-in skills.
 >
 > Per the cross-skill doc-consistency agreement (May 2026), `PLUGIN_GUIDE.md` is no longer a target for new writing — it's preserved here as adversarial-specific reference, not as a uniform pattern. The granular docs above are the canonical entry points.
 
@@ -12,7 +12,7 @@ End-to-end guide to installing, configuring, testing, and operating the `beril-a
 
 > **Audience.** Researchers using BERIL on the JupyterHub or a local fork, integrators wiring this skill into other skills' orchestrators, and operators deploying it on shared infrastructure. Not the design rationale — for that read [`SCHEMA_V3_DECISIONS.md`](SCHEMA_V3_DECISIONS.md) and [`CONTRACT.md`](CONTRACT.md).
 
-> **Skill version.** This guide tracks `beril-adversarial-skill v0.7.0.2`. For the changelog, see [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
+> **Skill version.** This guide tracks `beril-adversarial-skill v0.7.1`. For the changelog, see [`RELEASE_NOTES.md`](RELEASE_NOTES.md).
 
 ---
 
@@ -92,7 +92,7 @@ For everything else read the rest of this doc.
 ### Install from GitHub (recommended for hub deployments)
 
 ```bash
-pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git
+pipx install --force git+https://github.com/kbaseincubator/beril-adversarial-skill.git
 ```
 
 This works on shared hosts (e.g., JupyterHub instances) without SSH keys registered with GitHub. It uses HTTPS and relies on a credential helper or a personal access token if the repo is private.
@@ -102,13 +102,13 @@ This works on shared hosts (e.g., JupyterHub instances) without SSH keys registe
 If you have a wheel file (e.g., from a release tag or a colleague's build):
 
 ```bash
-pipx install --force /path/to/beril_adversarial_skill-0.7.0.2-py3-none-any.whl
+pipx install --force /path/to/beril_adversarial_skill-0.7.1-py3-none-any.whl
 ```
 
 ### SSH alternative (if you have a registered SSH key)
 
 ```bash
-pipx install --force git+ssh://git@github.com/ArkinLaboratory/beril-adversarial-skill.git
+pipx install --force git+ssh://git@github.com/kbaseincubator/beril-adversarial-skill.git
 ```
 
 The `git@` is mandatory — `git+ssh://github.com/...` (without it) fails. If `pipx` warns about PATH, run `pipx ensurepath` once after the install.
@@ -116,7 +116,7 @@ The `git@` is mandatory — `git+ssh://github.com/...` (without it) fails. If `p
 ### Verify the install
 
 ```bash
-beril-adversarial --version    # should print "beril-adversarial-skill 0.7.0.2"
+beril-adversarial --version    # should print "beril-adversarial-skill 0.7.1"
 beril-adversarial --help       # lists subcommands: install-skill, configure, review
 ```
 
@@ -125,7 +125,7 @@ beril-adversarial --help       # lists subcommands: install-skill, configure, re
 ```bash
 pipx upgrade beril-adversarial-skill
 # OR for explicit version pin:
-pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git@v0.7.0.2
+pipx install --force git+https://github.com/kbaseincubator/beril-adversarial-skill.git@v0.7.1
 ```
 
 After any update, **re-run `beril-adversarial install-skill <BERIL_ROOT>`** so the deployed skill files in your BERIL fork pick up the new version's prompts, tools, and SKILL.md.
@@ -206,10 +206,12 @@ If `codex` is on PATH, `configure` reports `[OK] codex — <path> (enables --rev
 
 ### Optional: model override
 
-The default model is `claude-sonnet-4-6`. Override per-invocation:
+By default the review runs on the model `configure` pinned for the review tier in
+`<BERIL_ROOT>/.claude/settings.json` (CRAFT-CONTRACT §3.4 — concrete model ids are no
+longer hardcoded). Override for a single invocation:
 
 ```bash
-beril-adversarial review --type paper <draft> --model claude-opus-4-x
+beril-adversarial review --type paper <draft> --model <model_id>
 ```
 
 ### Optional: `BERIL_ROOT` env var
@@ -229,7 +231,7 @@ For per-project tuning (e.g., a specific model for one project's reviews), pass 
 Clone the repo if you don't have it, install dev dependencies, and run pytest:
 
 ```bash
-git clone https://github.com/ArkinLaboratory/beril-adversarial-skill.git
+git clone https://github.com/kbaseincubator/beril-adversarial-skill.git
 cd beril-adversarial-skill
 pip install -e ".[dev]"     # or `pip install -e ".[dev]" --break-system-packages` if PEP 668-locked
 pytest tests/ -v
@@ -515,7 +517,7 @@ Claude Code isn't installed or isn't on PATH. Install Claude Code separately; ve
 The deployed skill is stale (from an older release that didn't have the v3 prompt). Refresh:
 
 ```bash
-pipx install --force git+https://github.com/ArkinLaboratory/beril-adversarial-skill.git
+pipx install --force git+https://github.com/kbaseincubator/beril-adversarial-skill.git
 beril-adversarial install-skill <BERIL_ROOT>
 ```
 
@@ -561,4 +563,4 @@ Run the consumer-side smoke test (above). The most common cause is consumer code
 
 ## Document version
 
-This guide tracks `beril-adversarial-skill v0.7.0.2`. Keep this header in sync with `pyproject.toml`'s version string when major changes ship. Update at every minor release; refresh examples and counts at every major. For the cross-skill release cadence and consumer migration coordination, see [`CONTRACT.md`](CONTRACT.md) §"v2 deprecation policy."
+This guide tracks `beril-adversarial-skill v0.7.1`. Keep this header in sync with `pyproject.toml`'s version string when major changes ship. Update at every minor release; refresh examples and counts at every major. For the cross-skill release cadence and consumer migration coordination, see [`CONTRACT.md`](CONTRACT.md) §"v2 deprecation policy."

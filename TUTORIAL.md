@@ -2,7 +2,7 @@
 
 A skill-specific guide for reading, interpreting, and iterating on adversarial reviews. Assumes you've already installed the skills and have a draft to review.
 
-> **For install + configure + first-time setup**, start with the cross-skill **[PARTICIPANT-RUNBOOK.md](https://github.com/ArkinLaboratory/beril-presentation-maker-skill/blob/main/docs/cross-skill/PARTICIPANT-RUNBOOK.md)** (covers all 4 plug-in skills end-to-end). This tutorial is the adversarial-specific layer that sits on top.
+> **For install + configure + first-time setup**, start with the cross-skill **[PARTICIPANT-RUNBOOK.md](https://github.com/kbaseincubator/beril-presentation-maker-skill/blob/main/docs/cross-skill/PARTICIPANT-RUNBOOK.md)** (covers all 4 plug-in skills end-to-end). This tutorial is the adversarial-specific layer that sits on top.
 
 > **For operator hub deployment**, see [HUB_INSTALL.md](HUB_INSTALL.md). For consumer integration (paper-writer / presentation-maker), see [CONTRACT.md](CONTRACT.md).
 
@@ -157,7 +157,7 @@ Not supported for paper/presentation v3 modes — those use the `--output` flag 
 
 ## Adversarial-specific troubleshooting
 
-For install / configure / general hub issues, see [PARTICIPANT-RUNBOOK.md §Troubleshooting](https://github.com/ArkinLaboratory/beril-presentation-maker-skill/blob/main/docs/cross-skill/PARTICIPANT-RUNBOOK.md). The issues below are adversarial-only.
+For install / configure / general hub issues, see [PARTICIPANT-RUNBOOK.md §Troubleshooting](https://github.com/kbaseincubator/beril-presentation-maker-skill/blob/main/docs/cross-skill/PARTICIPANT-RUNBOOK.md). The issues below are adversarial-only.
 
 **Review produces 0 P0 findings on a real paper or large deck** — The reviewer under-fired. Re-run; the prompt's self-skepticism pass usually catches this. If it persists, verify the input files are present (`manuscript.md`, `REPORT.md`, etc.).
 
@@ -173,7 +173,7 @@ For install / configure / general hub issues, see [PARTICIPANT-RUNBOOK.md §Trou
 
 ## Where to read more
 
-- **[PARTICIPANT-RUNBOOK.md](https://github.com/ArkinLaboratory/beril-presentation-maker-skill/blob/main/docs/cross-skill/PARTICIPANT-RUNBOOK.md)** — cross-skill participant guide (install, configure, BERIL workflow integration, all 4 skill flows).
+- **[PARTICIPANT-RUNBOOK.md](https://github.com/kbaseincubator/beril-presentation-maker-skill/blob/main/docs/cross-skill/PARTICIPANT-RUNBOOK.md)** — cross-skill participant guide (install, configure, BERIL workflow integration, all 4 skill flows).
 - **[HUB_INSTALL.md](HUB_INSTALL.md)** — operator runbook for JupyterHub deployment.
 - **[CONTRACT.md](CONTRACT.md)** — schema versions, field semantics, consumer migration. Read this if you're integrating adversarial output into another skill.
 - **[README.md](README.md)** — repo overview, status, doc map.

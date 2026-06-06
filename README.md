@@ -258,19 +258,19 @@ logic.
 ## Install
 
 ```bash
-# Run from BERIL_ROOT. Steps in order: install package → verify CLI loads →
-# configure cross-skill bindings → deploy skill files into BERIL.
+# Run from BERIL_ROOT. In order: install package → verify CLI loads →
+# deploy skill files into BERIL → bootstrap CRAFT runtime config.
 cd <BERIL_ROOT>
 pipx install --force git+https://github.com/kbaseincubator/beril-adversarial-skill.git \
   && beril-adversarial --version \
-  && beril-adversarial configure \
-  && beril-adversarial install-skill .
+  && beril-adversarial install-skill . \
+  && beril-adversarial configure .
 ```
 
 (HTTPS URL above works on shared hosts where SSH keys aren't registered with
 GitHub — e.g., JupyterHub instances; relies on a credential helper or a PAT.)
 
-If you have an SSH key registered with the ArkinLaboratory GitHub org, the
+If you have an SSH key registered with the kbaseincubator GitHub org, the
 SSH URL also works (and avoids needing a credential helper):
 
 ```bash
@@ -284,16 +284,42 @@ auth on private repos.
 bin dir to a PATH location that isn't on your `$PATH` yet, then `exec
 $SHELL -l` to reload.
 
-The first command installs the Python CLI. The second copies the
-Claude Code skill into `<BERIL_ROOT>/.claude/skills/beril-adversarial/`.
-The third confirms `claude` is on PATH and reports whether `codex` is
-also available (codex is optional; needed for `--reviewer codex` and
-`--reviewer claude,codex` fusion).
+`pipx install` adds the Python CLI; `--version` confirms it loads;
+`install-skill .` copies the Claude Code skill into
+`<BERIL_ROOT>/.claude/skills/beril-adversarial/`; and `configure .`
+bootstraps the CRAFT runtime config — it selects the LLM provider,
+resolves the reasoning/standard/fast model tiers, writes
+`<BERIL_ROOT>/.claude/settings.{json,local.json}`, and runs a validation
+ping so `claude -p` is known-good before your first review. (`codex` is
+optional, needed only for `--reviewer codex` / `claude,codex` fusion.)
+See [HUB_INSTALL.md](HUB_INSTALL.md) for the step-by-step.
 
 `install-skill` is idempotent: re-running it overwrites the shipped files
 (`commands/`, `prompts/`, `references/`, `tools/`, `SKILL.md`) but
 preserves `state/` (learned-patterns memory). To upgrade after a new
 release: `pipx upgrade beril-adversarial-skill && beril-adversarial install-skill <BERIL_ROOT>`.
+
+## Runtime configuration (provider + model tiers)
+
+`configure` (run during install, above) wires the skill's `claude -p` reasoning to a
+CRAFT-contracted provider and is safe to re-run whenever the environment changes. The
+model follows CRAFT-CONTRACT §3.4:
+
+- **Provider** — `ACTIVE_PROVIDER` ∈ `anthropic | cborg | subscription`, in
+  `<BERIL_ROOT>/.env`. If unset it is inferred from the keys already present (a
+  `CBORG_API_KEY` → `cborg`, an `ANTHROPIC_API_KEY` → `anthropic`, neither →
+  `subscription`), so an existing BERIL `.env` keeps working unchanged.
+- **Model tiers** — three logical tiers (`reasoning` / `standard` / `fast`) instead of
+  hardcoded model ids. `configure` discovers the provider's live model list and pins a
+  concrete, visible model per tier into `<BERIL_ROOT>/.claude/settings.json`, so a model
+  swap is an explicit re-pin rather than silent drift. Override discovery by pinning
+  `MODEL_REASONING` / `MODEL_STANDARD` / `MODEL_FAST` in `.env`.
+- **Additive `.env`** — `configure` only *adds* the CRAFT block + this skill's marker;
+  it never re-declares a credential the file already holds.
+
+The adversarial reviewer has no image generation and no app-internal API client, so it
+consumes only the `claude -p` side of the contract. See [HUB_INSTALL.md](HUB_INSTALL.md)
+§"Step 3 — Configure" for the full flow.
 
 ## Usage
 
@@ -332,9 +358,11 @@ runs the presentation reviewer.
   verification — good for fast development iteration. Deep (~15–25m)
   expands literature scan, multi-source verification, and sensitivity
   analyses — for pre-publication review.
-- `--model <model_id>` — override the default model
-  (`claude-sonnet-4-6` for claude — bumped from sonnet-4 in v0.5.1;
-  `gpt-5.4` for codex).
+- `--model <model_id>` — override the model for this invocation. By
+  default the review runs on the model `configure` pinned for the review
+  tier (see [HUB_INSTALL.md](HUB_INSTALL.md)); for codex, the configured
+  codex-profile model. Concrete model ids are no longer hardcoded — they
+  come from the per-tier pins `configure` writes.
 - `--no-stream` — opt out of the stream-json parser (disables
   programmatic Write verification, automatic retry on silent-failure,
   cost summary, and stream log). Default: parser is on.
@@ -478,7 +506,7 @@ A typical review file looks like:
 
 ```markdown
 ---
-reviewer: BERIL Adversarial Review (Claude, claude-sonnet-4-20250514)
+reviewer: BERIL Adversarial Review (Claude, <configured review-tier model>)
 type: project
 date: 2026-04-25
 project: my_project
@@ -537,7 +565,7 @@ prior_reviews_considered:
 
 ## Run Metadata
 - Elapsed: 11:48
-- Model: claude-sonnet-4-20250514
+- Model: <configured review-tier model>
 - Tokens: input=2,364,391 output=20,695 (cache_read=590,041)
 - Estimated cost: $1.470
 - Pipeline: main + critic + fix + re-critic (4 calls)
