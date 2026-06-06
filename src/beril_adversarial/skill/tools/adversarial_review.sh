@@ -33,6 +33,12 @@ set -euo pipefail
 # --- Defaults ---
 REVIEWER="claude"
 MODEL=""
+# Tracks whether the caller passed --model explicitly. When 1, the caller's
+# pin wins for EVERY claude -p invocation (main review, JSON-repair,
+# compliance critic, fix pass). When 0, the main review uses
+# CLAUDE_DEFAULT_MODEL_REASONING (opus) and the recovery/critic passes
+# drop to CLAUDE_DEFAULT_MODEL_STANDARD (sonnet). See pick_recovery_model().
+MODEL_EXPLICIT=0
 PROJECT_ID=""
 REVIEW_TYPE="project"
 OUTPUT_FILE=""
@@ -51,8 +57,51 @@ NO_CRITIC=0
 # token cost (just HTTP calls to free registries).
 NO_VERIFY_CITATIONS=0
 
-CLAUDE_DEFAULT_MODEL="claude-sonnet-4-6"  # v0.5.1: bumped from claude-sonnet-4-20250514 (~12 mo old)
+# --- Tier-alias defaults (CRAFT-CONTRACT §3.4 v2) ---
+# Per-tier defaults use Claude Code's native --model aliases (opus/sonnet/haiku)
+# which resolve through ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL pinned in
+# <BERIL_ROOT>/.claude/settings.json by `beril-adversarial configure`. No
+# concrete model id is hardcoded; a model swap is a settings.json re-pin.
+#
+# Main review = reasoning tier (the adversarial judgment).
+# JSON-repair  = standard tier (mechanical reformatting; Sonnet is plenty).
+# Compliance critic + fix pass = standard tier (recoverable, high-volume).
+#
+# A caller's --model still overrides; otherwise per-call helpers fall back
+# to the matching CLAUDE_DEFAULT_MODEL_<TIER> alias.
+CLAUDE_DEFAULT_MODEL_REASONING="opus"
+CLAUDE_DEFAULT_MODEL_STANDARD="sonnet"
+CLAUDE_DEFAULT_MODEL_FAST="haiku"
+# Back-compat alias: code paths that haven't been re-pointed yet still
+# read CLAUDE_DEFAULT_MODEL; default it to the reasoning tier (Opus). This
+# preserves behavior for any path not yet migrated to a specific tier.
+CLAUDE_DEFAULT_MODEL="$CLAUDE_DEFAULT_MODEL_REASONING"
+
+# Codex (GPT) review backend (--reviewer codex). Codex itself is configured
+# via ~/.codex/config.toml; this is just the per-call --model alias.
 CODEX_DEFAULT_MODEL="gpt-5.4"
+# CRAFT-CONTRACT §3.4: invoke `codex exec --profile <name>` explicitly;
+# NEVER rely on the global `profile =` default in ~/.codex/config.toml
+# (verified-fragile gotcha). Caller may override via CODEX_PROFILE env var.
+CODEX_DEFAULT_PROFILE="${CODEX_PROFILE:-cborg-gpt-large}"
+
+# Pick the model for a recovery / critic pass (JSON-repair, compliance
+# critic, fix pass). Contract: the caller's explicit --model wins; otherwise
+# drop from the reasoning tier (used for the main review) to the standard
+# tier (sonnet) — these passes are mechanical / recoverable and don't need
+# the expensive Opus reasoning.
+#
+# Usage: pick_recovery_model "$MODEL"
+#   - If $MODEL is set AND came from --model (MODEL_EXPLICIT=1), echo $MODEL.
+#   - Else echo CLAUDE_DEFAULT_MODEL_STANDARD.
+pick_recovery_model() {
+  local current_model="${1:-}"
+  if [[ "${MODEL_EXPLICIT:-0}" == "1" && -n "$current_model" ]]; then
+    printf '%s' "$current_model"
+  else
+    printf '%s' "$CLAUDE_DEFAULT_MODEL_STANDARD"
+  fi
+}
 
 CLAUDE_TOOLS="Read,Write,Bash,Grep,Glob,WebSearch,Agent,ToolSearch"
 
@@ -81,8 +130,11 @@ Options:
   --reviewer R                claude | codex | claude,codex
                               (claude,codex runs both in parallel and
                               fuses the results; default: claude)
-  --model <model_id>          Model override (default: claude-sonnet-4-6
-                              for claude; gpt-5.4 for codex)
+  --model <model_id>          Model override (default for claude: tier
+                              aliases — opus for the main review, sonnet
+                              for JSON-repair + critic + fix; resolved
+                              from <BERIL_ROOT>/.claude/settings.json.
+                              Default for codex: gpt-5.4.)
   --beril-root <path>         BERIL repository root (default: auto-detect)
   --consolidate               Skip review; synthesize all numbered
                               reviews of matching --type into a canonical
@@ -137,6 +189,10 @@ while [[ $# -gt 0 ]]; do
     --model)
       [[ -z "${2:-}" ]] && { echo "Error: --model requires a value" >&2; usage 1; }
       MODEL="$2"
+      # Track caller's explicit override so JSON-repair / critic / fix-pass
+      # use the caller's pin uniformly instead of dropping to a cheaper tier
+      # (CRAFT-CONTRACT §3.4: an explicit --model still wins).
+      MODEL_EXPLICIT=1
       shift 2
       ;;
     --beril-root)
@@ -792,7 +848,11 @@ block before emitting JSON."
   # unescaped inner double-quote). See validate_and_repair_json() above.
   local VALIDATOR="$SKILL_DIR/tools/validate_presentation_review.py"
   local json_safety_rc=0
-  validate_and_repair_json "$OUT_JSON" "$VALIDATOR" "$MODEL" \
+  # JSON-repair is mechanical; CRAFT §3.4 standard tier (sonnet) suffices.
+  # Caller's --model still wins via pick_recovery_model.
+  local REPAIR_MODEL
+  REPAIR_MODEL="$(pick_recovery_model "$MODEL")"
+  validate_and_repair_json "$OUT_JSON" "$VALIDATOR" "$REPAIR_MODEL" \
     "presentation-maker review-rewrite loop" || json_safety_rc=$?
 
   echo "Presentation review complete."
@@ -1125,7 +1185,10 @@ miscount, but try)."
     VALIDATOR="$SKILL_DIR/tools/validate_presentation_review.py"
   fi
   local json_safety_rc=0
-  validate_and_repair_json "$OUT_JSON" "$VALIDATOR" "$MODEL" \
+  # JSON-repair is mechanical; CRAFT §3.4 standard tier suffices.
+  local REPAIR_MODEL
+  REPAIR_MODEL="$(pick_recovery_model "$MODEL")"
+  validate_and_repair_json "$OUT_JSON" "$VALIDATOR" "$REPAIR_MODEL" \
     "paper-writer review-rewrite loop" || json_safety_rc=$?
 
   echo "Paper review complete."
@@ -1315,7 +1378,13 @@ invoke_codex() {
 
 ${review_prompt}"
 
+  # CRAFT-CONTRACT §3.4: pass --profile EXPLICITLY. Relying on the global
+  # `profile =` default in ~/.codex/config.toml is fragile (verified gotcha
+  # — it collides with other Codex uses). The profile is taken from
+  # CODEX_DEFAULT_PROFILE (defaulting to `cborg-gpt-large`); a caller may
+  # override per-invocation via the CODEX_PROFILE env var.
   codex exec \
+    --profile "$CODEX_DEFAULT_PROFILE" \
     --model "$model" \
     --sandbox workspace-write \
     --ephemeral \
@@ -1564,6 +1633,12 @@ finalize_review() {
   local sys_prompt_file="$2"
   local model="$3"
 
+  # Critic + fix + re-critic are recoverable / mechanical passes. CRAFT
+  # §3.4 routes them to the standard tier (sonnet) unless the caller pinned
+  # --model explicitly. Compute once and reuse across all three calls.
+  local recovery_model
+  recovery_model="$(pick_recovery_model "$model")"
+
   # Forensic artifacts (audit logs, fix attempts, pre-fix backup) live in
   # a debug subdirectory so they don't litter the project root. We wipe
   # this subdir at start of each finalize_review call: only the most
@@ -1577,7 +1652,7 @@ finalize_review() {
   if [[ "$NO_CRITIC" != "1" ]]; then
     local audit_file="$debug_dir/audit.md"
     local meta_critic="${output_file}.metadata.critic.json"
-    if invoke_critic "$output_file" "$model" "$audit_file" "$meta_critic"; then
+    if invoke_critic "$output_file" "$recovery_model" "$audit_file" "$meta_critic"; then
       META_FILES+=( "$meta_critic" )
       CALL_LABELS+=( "critic" )
 
@@ -1602,7 +1677,7 @@ finalize_review() {
 
         local fix_rc=0
         invoke_fix_pass "$output_file" "$audit_file" "$sys_prompt_file" \
-                        "$model" "$meta_fix" || fix_rc=$?
+                        "$recovery_model" "$meta_fix" || fix_rc=$?
 
         # Validate the post-fix file: must have YAML frontmatter and at
         # least 60% of the original line count (catches drastic truncation
@@ -1631,7 +1706,7 @@ finalize_review() {
 
           local audit_file2="$debug_dir/audit2.md"
           local meta_recritic="${output_file}.metadata.recritic.json"
-          if invoke_critic "$output_file" "$model" "$audit_file2" "$meta_recritic"; then
+          if invoke_critic "$output_file" "$recovery_model" "$audit_file2" "$meta_recritic"; then
             META_FILES+=( "$meta_recritic" )
             CALL_LABELS+=( "re-critic" )
             if grep -q "^STATUS: PASS" "$audit_file2" 2>/dev/null; then

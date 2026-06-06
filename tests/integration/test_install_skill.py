@@ -14,7 +14,6 @@ import pytest
 
 from beril_adversarial.commands import install_skill
 
-
 pytestmark = pytest.mark.integration
 
 
@@ -66,8 +65,12 @@ def test_install_skill_sets_executable_bit_on_shell_script(
     install_skill.run(args)
 
     script = (
-        synthetic_beril_root / ".claude" / "skills" / "beril-adversarial"
-        / "tools" / "adversarial_review.sh"
+        synthetic_beril_root
+        / ".claude"
+        / "skills"
+        / "beril-adversarial"
+        / "tools"
+        / "adversarial_review.sh"
     )
     mode = script.stat().st_mode
     assert mode & stat.S_IXUSR, "owner exec bit not set"
@@ -86,8 +89,12 @@ def test_install_skill_preserves_state_on_reinstall(synthetic_beril_root: Path):
 
     # User writes a learned-pattern entry to state/
     state_file = (
-        synthetic_beril_root / ".claude" / "skills" / "beril-adversarial"
-        / "state" / "learned-patterns.md"
+        synthetic_beril_root
+        / ".claude"
+        / "skills"
+        / "beril-adversarial"
+        / "state"
+        / "learned-patterns.md"
     )
     state_file.write_text("# Test pattern entry\n", encoding="utf-8")
 
@@ -138,3 +145,44 @@ def test_install_skill_fails_on_invalid_beril_root(tmp_path: Path):
     )
     rc = install_skill.run(args)
     assert rc == 1
+
+
+def test_install_skill_does_not_run_configure_side_effects(
+    synthetic_beril_root: Path,
+):
+    """install-skill MUST NOT invoke configure as its post-install smoke.
+
+    configure has real side effects (extends .env with the CRAFT shared
+    block + per-skill marker, writes .claude/settings.json +
+    settings.local.json, ensures .gitignore, runs a live `claude -p`
+    ping). install-skill is for copying skill data into BERIL/.claude/
+    skills/; it must not silently mutate .env or write settings files.
+
+    This test pins the post-install behavior by asserting:
+      - .env content is byte-identical before and after install
+      - .claude/settings.json does NOT exist after install
+      - .claude/settings.local.json does NOT exist after install
+      - the CRAFT sentinel is NOT present in .env after install
+    """
+    env_path = synthetic_beril_root / ".env"
+    env_before = env_path.read_bytes()
+
+    args = argparse.Namespace(
+        beril_root=str(synthetic_beril_root),
+        force=False,
+        no_smoke_test=False,  # default — exercises the light smoke path
+    )
+    rc = install_skill.run(args)
+    assert rc == 0
+
+    # .env must be byte-identical — install-skill never edits it.
+    assert env_path.read_bytes() == env_before, (
+        ".env was mutated by install-skill — configure side effects leaked into install-skill"
+    )
+    # CRAFT sentinel is the configure step's marker; it must not be here.
+    assert "CRAFT shared config" not in env_path.read_text()
+
+    # Neither settings file may exist — configure writes them, not install.
+    claude_dir = synthetic_beril_root / ".claude"
+    assert not (claude_dir / "settings.json").exists()
+    assert not (claude_dir / "settings.local.json").exists()
