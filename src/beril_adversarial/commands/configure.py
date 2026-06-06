@@ -43,6 +43,7 @@ import shutil
 import string
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -61,6 +62,14 @@ PER_SKILL_MARKER = "# --- beril-adversarial-skill (per-skill) ---"
 DEFAULT_MODELS_TIMEOUT = 15.0
 DEFAULT_PING_TIMEOUT = 60.0
 GITIGNORE_LINE = ".claude/settings.local.json"
+
+# Validation-ping prompt + system prompt. Deterministic by construction:
+# the system prompt forces the model to emit exactly "ok"; the user prompt
+# is a short reminder. The strict match + clean-cwd + explicit env keep the
+# ping from being confounded by project context (CLAUDE.md, skills) or by
+# chatty-by-default models. Contract §3.4 req 3.2.
+PING_PROMPT = "Reply with just: ok"
+PING_SYSTEM_PROMPT = "Output exactly the two characters: ok. Nothing else."
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +128,32 @@ def compose_env_append(env_text: str) -> str:
     if not has_skill_marker(env_text):
         return template_env.render(include_shared=False)
     return ""
+
+
+def _tier_candidates_newest_first(available: list[str], family: str) -> list[str]:
+    """Return the provider's models for `family`, ordered newest-first with
+    non-`-high` variants preferred. Mirrors `pick_newest`'s discipline so a
+    ping-fail fallback walks the same ordering: take the first survivor.
+
+    `pick_newest(available, family)` is equivalent to
+    `_tier_candidates_newest_first(available, family)[0]` (or None on empty).
+    """
+    fam = [m for m in available if family in m.lower()]
+    if not fam:
+        return []
+    plain = sorted(
+        (m for m in fam if not m.lower().endswith("-high")),
+        key=llm_config._version_key,
+        reverse=True,
+    )
+    high = sorted(
+        (m for m in fam if m.lower().endswith("-high")),
+        key=llm_config._version_key,
+        reverse=True,
+    )
+    # Plain variants first (cheaper / non-reasoning-mode), then -high
+    # as a last resort — matching pick_newest's preference.
+    return plain + high
 
 
 def shape_settings(resolved: llm_config.ResolvedConfig) -> tuple[dict, dict]:
@@ -293,37 +328,90 @@ def resolve_unresolved_interactively(
 def validation_ping(
     model: str,
     *,
-    beril_root: Path,
+    public_env: dict[str, str] | None = None,
+    secret_env: dict[str, str] | None = None,
     timeout: float = DEFAULT_PING_TIMEOUT,
 ) -> tuple[bool, str]:
-    """Ask `claude -p` to reply exactly with `ok`; assert the response IS `ok`.
+    """Deterministically ask `claude -p` for the literal `ok`; assert the
+    response IS `ok`.
 
-    Returns (success, response_text). Success means the subprocess exited 0
-    AND the response, lowercased + stripped of surrounding whitespace and
-    punctuation, EQUALS the token `ok` (not a substring match — a substring
-    match false-passes on greetings like "Okay, what would you like to do?",
-    defeating the response-validation the contract requires). An invalid
-    model returns a generic greeting at exit 0 on CBORG; exit-code-only
-    validation is unsafe (contract §3.4 req 3.2).
+    Three robustness properties (CRAFT-CONTRACT §3.4 req 3.2):
 
-    Runs with `cwd=beril_root` so Claude Code finds `<root>/.claude/settings.json`
-    via its native cwd-walk-up.
+      1. **Determinism by system prompt.** The system prompt FORCES the
+         model to output exactly the token `ok`. Chatty-by-default models
+         (`"Ready when you are."`, `"Hi!"`, etc.) without the system
+         prompt make the ping flaky.
+
+      2. **No project context leakage.** Runs in a clean tempdir as cwd,
+         NOT in BERIL_ROOT. Otherwise Claude Code walks up from cwd,
+         loads `<BERIL_ROOT>/CLAUDE.md` + project skills, and confounds
+         a "reply with just ok" with project context (slash commands,
+         skill outputs, etc.).
+
+      3. **Explicit env injection.** `public_env` + `secret_env` (the two
+         halves of `llm_config.resolve(...).{public,secret}_env`) are
+         passed EXPLICITLY into the subprocess env. We don't rely on
+         the new `<BERIL>/.claude/settings.json` being read by the
+         subprocess — that's load-bearing for the steady-state, but
+         the ping is the test that the SETTINGS WE JUST RESOLVED are
+         valid; conflating "did configure write the file" with "does
+         the resolved config work" loses information when one of the
+         two fails.
+
+    Returns (success, response_text). Success requires exit 0 AND the
+    response (lowercased + stripped of surrounding whitespace and
+    punctuation) EQUALS the token `ok` — not a substring match.
+
+    `public_env` / `secret_env` default to empty dicts so callers can
+    omit them for the subscription / ambient-login path. The subprocess
+    inherits PATH / HOME / USER from os.environ (needed for the `claude`
+    binary itself to find Node + the user's auth config); everything
+    else is injected explicitly so the test is the resolved config and
+    nothing else.
     """
     claude = shutil.which("claude")
     if claude is None:
         return False, "(claude not on PATH)"
-    prompt = "reply: ok"
+
+    public_env = public_env or {}
+    secret_env = secret_env or {}
+
+    # Minimal pass-through: just what the `claude` binary itself needs to
+    # locate Node + the user's runtime. Everything provider-related must
+    # come from public_env + secret_env so the test is the resolved config.
+    base_env: dict[str, str] = {}
+    for key in ("PATH", "HOME", "USER", "LANG", "LC_ALL", "SHELL", "TMPDIR"):
+        val = os.environ.get(key)
+        if val is not None:
+            base_env[key] = val
+    # CLAUDECODE="" suppresses any inherited test-runner Claude Code
+    # subagent-detection state.
+    base_env["CLAUDECODE"] = ""
+
+    env = {**base_env, **public_env, **secret_env}
+
+    cmd = [
+        claude,
+        "-p",
+        "--model",
+        model,
+        "--system-prompt",
+        PING_SYSTEM_PROMPT,
+        PING_PROMPT,
+    ]
+
     try:
-        completed = subprocess.run(
-            [claude, "-p", "--model", model, prompt],
-            cwd=str(beril_root),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            env={**os.environ, "CLAUDECODE": ""},
-        )
+        with tempfile.TemporaryDirectory(prefix="craft-ping-") as cwd:
+            completed = subprocess.run(
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                env=env,
+            )
     except subprocess.TimeoutExpired:
         return False, "(timeout)"
     except OSError as exc:
@@ -332,10 +420,8 @@ def validation_ping(
     body = (completed.stdout or "") + (completed.stderr or "")
     if completed.returncode != 0:
         return False, f"(exit {completed.returncode}) {body.strip()[:400]}"
-    # Response-validation: an unresolved model on CBORG returns a generic
-    # greeting at exit 0. EQUALITY against the canonical token (not
-    # substring) — a substring match false-passes on "Okay, what would
-    # you like to do?", which contains "ok".
+    # EQUALITY (not substring) against the canonical token. A substring
+    # match false-passes on "Okay, ..." which contains "ok".
     stripped = body.strip().lower().strip(string.punctuation + string.whitespace)
     if stripped != "ok":
         return False, f"(response was not 'ok') {body.strip()[:400]}"
@@ -477,7 +563,18 @@ def run(args: argparse.Namespace) -> int:
             print(f"  [OK] provider serves {len(available)} model id(s)")
 
     # 4. Resolve tier models.
-    resolved = llm_config.resolve(env_map, available)
+    try:
+        resolved = llm_config.resolve(env_map, available)
+    except llm_config.ConfigError as exc:
+        # Internally-contradictory .env (e.g. ACTIVE_PROVIDER=cborg with no
+        # CBORG_API_KEY). Fail loud, not stack-trace.
+        print(f"  [ERROR] .env is inconsistent: {exc}", file=sys.stderr)
+        print(
+            f"    Edit {env_path} so the credentials match ACTIVE_PROVIDER, "
+            "or set ACTIVE_PROVIDER=subscription for ambient login.",
+            file=sys.stderr,
+        )
+        return 1
     for w in resolved.warnings:
         print(f"  [WARN] {w}", file=sys.stderr)
 
@@ -565,21 +662,82 @@ def run(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
         else:
-            print(f"  [..] validation ping (reasoning tier, model={reasoning_model})")
-            ok, body = validation_ping(reasoning_model, beril_root=beril_root)
-            if not ok:
+            # Fallback set: if the reasoning tier was DISCOVERED (no user
+            # pin in .env), and the picked model fails its ping, walk the
+            # next-newest candidates for the family rather than pinning a
+            # model that can't pass its own ping. A USER-pinned model
+            # that fails is a hard error (we tell them; they re-pin).
+            family = llm_config.TIER_FAMILY["reasoning"]
+            user_pinned = bool(env_map.get(llm_config.TIER_ENVKEY["reasoning"], "").strip())
+            if user_pinned or available is None:
+                fallback_chain: list[str] = [reasoning_model]
+            else:
+                fallback_chain = _tier_candidates_newest_first(available, family)
+                # Ensure the currently-picked one is first; the rest are
+                # next-newest, next-next-newest, ... (no duplicates).
+                if reasoning_model in fallback_chain:
+                    fallback_chain.remove(reasoning_model)
+                fallback_chain = [reasoning_model, *fallback_chain]
+
+            chosen: str | None = None
+            last_body = ""
+            for attempt_model in fallback_chain:
+                if attempt_model == reasoning_model:
+                    print(f"  [..] validation ping (reasoning tier, model={attempt_model})")
+                else:
+                    print(f"  [..] validation ping fallback (next-newest, model={attempt_model})")
+                ok, body = validation_ping(
+                    attempt_model,
+                    public_env=resolved.public_env,
+                    secret_env=resolved.secret_env,
+                )
+                last_body = body
+                if ok:
+                    chosen = attempt_model
+                    print(f"  [OK] validation ping: {body!r}")
+                    break
                 print(
-                    f"  [ERROR] validation ping failed: {body}",
+                    f"  [WARN] ping failed on {attempt_model}: {body}",
+                    file=sys.stderr,
+                )
+
+            if chosen is None:
+                print(
+                    f"  [ERROR] validation ping failed on all candidates "
+                    f"({len(fallback_chain)} tried): last response {last_body}",
                     file=sys.stderr,
                 )
                 print(
-                    "    Hint: contract §3.4 requires response-validation, "
-                    "not exit-code. A wrong model on CBORG returns a generic "
-                    "greeting at exit 0 — that's exactly what this catches.",
+                    "    Hint: contract §3.4 req 3.2 requires response-validation, "
+                    "not exit-code. A wrong/unsupported model on CBORG returns a "
+                    "generic greeting at exit 0; that's what this catches. If you "
+                    "have a manual pin in .env for the reasoning tier, edit it to "
+                    "a model the provider actually serves.",
                     file=sys.stderr,
                 )
                 return 1
-            print(f"  [OK] validation ping: {body!r}")
+
+            # If the fallback picked a different model than the originally-
+            # resolved one, persist it: re-pin .env and update settings.json
+            # so the steady-state behavior matches what we just verified.
+            if chosen != reasoning_model:
+                env_text = update_or_append_kv(
+                    env_text, llm_config.TIER_ENVKEY["reasoning"], chosen
+                )
+                env_path.write_text(env_text)
+                env_map = parse_env_text(env_text)
+                print(
+                    f"  [OK] re-pinned MODEL_REASONING={chosen} in .env "
+                    "(was {reasoning_model}; failed ping)".format(reasoning_model=reasoning_model)
+                )
+                # Re-shape settings with the working model so the file on
+                # disk reflects what passed.
+                resolved = llm_config.resolve(env_map, available)
+                settings, settings_local = shape_settings(resolved)
+                settings_path, local_path = _write_settings_files(
+                    beril_root, settings, settings_local
+                )
+                print(f"  [OK] rewrote {settings_path} (re-pinned)")
 
     # 7. Stamp configured-at.
     now = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

@@ -278,8 +278,8 @@ class _FakeCompleted:
         self.stderr = stderr
 
 
-def test_validation_ping_accepts_ok_response(tmp_path):
-    """Exit 0 + 'ok' in body → success."""
+def test_validation_ping_accepts_ok_response():
+    """Exit 0 + canonical 'ok' body → success."""
 
     def fake_run(*args, **kwargs):
         return _FakeCompleted(0, stdout="ok\n")
@@ -288,12 +288,12 @@ def test_validation_ping_accepts_ok_response(tmp_path):
         mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
         mock.patch.object(configure.subprocess, "run", fake_run),
     ):
-        ok, body = configure.validation_ping("claude-opus-4-7", beril_root=tmp_path)
+        ok, body = configure.validation_ping("claude-opus-4-7")
     assert ok is True
     assert "ok" in body.lower()
 
 
-def test_validation_ping_rejects_generic_greeting_at_exit_zero(tmp_path):
+def test_validation_ping_rejects_generic_greeting_at_exit_zero():
     """The verified-fragile case: wrong model on CBORG returns
     a generic greeting at exit 0. Response-validation must catch it."""
 
@@ -307,12 +307,12 @@ def test_validation_ping_rejects_generic_greeting_at_exit_zero(tmp_path):
         mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
         mock.patch.object(configure.subprocess, "run", fake_run),
     ):
-        ok, body = configure.validation_ping("opus-4-8", beril_root=tmp_path)
+        ok, body = configure.validation_ping("opus-4-8")
     assert ok is False
     assert "response was not 'ok'" in body
 
 
-def test_validation_ping_rejects_okay_greeting(tmp_path):
+def test_validation_ping_rejects_okay_greeting():
     """Round-1 regression: substring match false-passes on a greeting
     that begins with "Okay,". Equality-after-normalize must reject it."""
 
@@ -326,12 +326,31 @@ def test_validation_ping_rejects_okay_greeting(tmp_path):
         mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
         mock.patch.object(configure.subprocess, "run", fake_run),
     ):
-        ok, body = configure.validation_ping("opus-4-8", beril_root=tmp_path)
+        ok, body = configure.validation_ping("opus-4-8")
     assert ok is False
     assert "response was not 'ok'" in body
 
 
-def test_validation_ping_accepts_uppercase_ok_with_trailing_period(tmp_path):
+def test_validation_ping_rejects_ready_when_you_are():
+    """Round-3 regression (the case from the Hub install): a chatty model
+    answers `"Ready when you are."` to `reply: ok`. Strict equality must
+    catch it — substring-`"ok"` doesn't appear, but a looser any-greeting-
+    is-fine check would. The system-prompt + strict equality together are
+    what make the ping deterministic."""
+
+    def fake_run(*args, **kwargs):
+        return _FakeCompleted(0, stdout="Ready when you are.")
+
+    with (
+        mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(configure.subprocess, "run", fake_run),
+    ):
+        ok, body = configure.validation_ping("opus-4-8")
+    assert ok is False
+    assert "response was not 'ok'" in body
+
+
+def test_validation_ping_accepts_uppercase_ok_with_trailing_period():
     """`OK.` (uppercase + trailing punctuation) is still a clean
     canonical-token reply — the normalize step strips both."""
 
@@ -342,12 +361,12 @@ def test_validation_ping_accepts_uppercase_ok_with_trailing_period(tmp_path):
         mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
         mock.patch.object(configure.subprocess, "run", fake_run),
     ):
-        ok, body = configure.validation_ping("claude-opus-4-7", beril_root=tmp_path)
+        ok, body = configure.validation_ping("claude-opus-4-7")
     assert ok is True
     assert "OK" in body
 
 
-def test_validation_ping_accepts_bare_ok(tmp_path):
+def test_validation_ping_accepts_bare_ok():
     """Bare `ok` (no punctuation) is the canonical happy path."""
 
     def fake_run(*args, **kwargs):
@@ -357,12 +376,12 @@ def test_validation_ping_accepts_bare_ok(tmp_path):
         mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
         mock.patch.object(configure.subprocess, "run", fake_run),
     ):
-        ok, body = configure.validation_ping("claude-opus-4-7", beril_root=tmp_path)
+        ok, body = configure.validation_ping("claude-opus-4-7")
     assert ok is True
     assert body == "ok"
 
 
-def test_validation_ping_handles_nonzero_exit(tmp_path):
+def test_validation_ping_handles_nonzero_exit():
     def fake_run(*args, **kwargs):
         return _FakeCompleted(1, stderr="model not found")
 
@@ -370,20 +389,22 @@ def test_validation_ping_handles_nonzero_exit(tmp_path):
         mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
         mock.patch.object(configure.subprocess, "run", fake_run),
     ):
-        ok, body = configure.validation_ping("ghost-model", beril_root=tmp_path)
+        ok, body = configure.validation_ping("ghost-model")
     assert ok is False
     assert "(exit 1)" in body
 
 
-def test_validation_ping_no_claude_on_path(tmp_path):
+def test_validation_ping_no_claude_on_path():
     with mock.patch.object(configure.shutil, "which", return_value=None):
-        ok, body = configure.validation_ping("anything", beril_root=tmp_path)
+        ok, body = configure.validation_ping("anything")
     assert ok is False
     assert "claude not on PATH" in body
 
 
-def test_validation_ping_runs_in_beril_root_cwd(tmp_path):
-    """`claude -p` reads `.claude/settings.json` via cwd walk-up — pin the cwd."""
+def test_validation_ping_runs_in_clean_tempdir_not_beril_root(tmp_path):
+    """Determinism by clean cwd: the subprocess must run in a tempdir,
+    NOT in beril_root, so Claude Code's cwd walk-up doesn't load
+    <BERIL_ROOT>/CLAUDE.md or project skills and confound the ping."""
     seen = {}
 
     def fake_run(*args, **kwargs):
@@ -394,8 +415,111 @@ def test_validation_ping_runs_in_beril_root_cwd(tmp_path):
         mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
         mock.patch.object(configure.subprocess, "run", fake_run),
     ):
-        configure.validation_ping("opus-4-7", beril_root=tmp_path)
-    assert seen["cwd"] == str(tmp_path)
+        configure.validation_ping("opus-4-7")
+    # cwd must be a fresh tempdir (not the test's tmp_path, not the BERIL
+    # root) — assert by exclusion: it's set, it's not the cwd of the test,
+    # and it's not somewhere obviously project-shaped.
+    assert seen["cwd"] is not None
+    assert seen["cwd"] != str(tmp_path)
+    assert "craft-ping-" in seen["cwd"], (
+        f"ping cwd {seen['cwd']!r} doesn't look like the TemporaryDirectory "
+        "with the craft-ping- prefix — the clean-cwd contract is broken"
+    )
+
+
+def test_validation_ping_injects_resolved_env_explicitly():
+    """Determinism by explicit env: the subprocess env must include the
+    public_env + secret_env we pass, NOT whatever happens to be in
+    os.environ. This pins the property that the ping tests the RESOLVED
+    config (the dicts we computed), not the on-disk settings.json."""
+    seen = {}
+
+    def fake_run(*args, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return _FakeCompleted(0, stdout="ok")
+
+    with (
+        mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(configure.subprocess, "run", fake_run),
+    ):
+        configure.validation_ping(
+            "claude-opus-4-7",
+            public_env={"ANTHROPIC_BASE_URL": "https://api.cborg.lbl.gov"},
+            secret_env={"ANTHROPIC_AUTH_TOKEN": "secret-XYZ"},
+        )
+    env = seen["env"]
+    assert env is not None
+    assert env["ANTHROPIC_BASE_URL"] == "https://api.cborg.lbl.gov"
+    assert env["ANTHROPIC_AUTH_TOKEN"] == "secret-XYZ"
+    # PATH passes through (claude needs it); CLAUDECODE is suppressed.
+    assert "PATH" in env
+    assert env["CLAUDECODE"] == ""
+
+
+def test_validation_ping_passes_system_prompt():
+    """Determinism by system prompt: the subprocess must include
+    --system-prompt with the canonical ok-only instruction. Chatty models
+    without it answer "Ready when you are." to `reply: ok`."""
+    seen = {}
+
+    def fake_run(cmd, *args, **kwargs):
+        seen["cmd"] = list(cmd)
+        return _FakeCompleted(0, stdout="ok")
+
+    with (
+        mock.patch.object(configure.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(configure.subprocess, "run", fake_run),
+    ):
+        configure.validation_ping("claude-opus-4-7")
+    cmd = seen["cmd"]
+    # cmd looks like: [claude, -p, --model, M, --system-prompt, SYS, USER_PROMPT]
+    assert "--system-prompt" in cmd
+    sp_idx = cmd.index("--system-prompt")
+    assert cmd[sp_idx + 1] == configure.PING_SYSTEM_PROMPT
+    # The system prompt must constrain to exactly "ok" — that's the
+    # whole point of the determinism contract.
+    assert "ok" in configure.PING_SYSTEM_PROMPT.lower()
+    assert "nothing else" in configure.PING_SYSTEM_PROMPT.lower()
+
+
+# ---------------------------------------------------------------------------
+# _tier_candidates_newest_first — feeds the run() ping-fallback loop
+# ---------------------------------------------------------------------------
+
+
+def test_tier_candidates_newest_first_orders_plain_then_high():
+    """The ordering contract: the function returns the same first element
+    as pick_newest, then walks the rest newest-first, with -high siblings
+    last (matches pick_newest's preference)."""
+    available = [
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-7-high",
+        "claude-opus-4-5",
+        "claude-sonnet-4-6",
+    ]
+    chain = configure._tier_candidates_newest_first(available, "opus")
+    # Plain variants newest-first, then -high
+    assert chain == [
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-opus-4-5",
+        "claude-opus-4-7-high",
+    ]
+    # First element matches pick_newest's pick — that's the load-bearing
+    # contract for the fallback loop.
+    assert chain[0] == llm_config.pick_newest(available, "opus")
+
+
+def test_tier_candidates_newest_first_returns_empty_when_family_absent():
+    assert configure._tier_candidates_newest_first(["gpt-5.5"], "opus") == []
+
+
+def test_tier_candidates_newest_first_only_high_variants():
+    """If only -high variants exist, walk those newest-first."""
+    available = ["claude-opus-4-6-high", "claude-opus-4-7-high"]
+    chain = configure._tier_candidates_newest_first(available, "opus")
+    assert chain == ["claude-opus-4-7-high", "claude-opus-4-6-high"]
 
 
 # ---------------------------------------------------------------------------
@@ -535,9 +659,13 @@ def test_run_reads_optional_flags_via_getattr(tmp_path, monkeypatch):
       which raised AttributeError mid-install.
     """
     # Build a minimal marker-valid BERIL root so discovery succeeds.
+    # The .env declares ACTIVE_PROVIDER=subscription so this test is
+    # independent of whatever defaults the shared CRAFT block happens to
+    # contain at the moment (cborg vs anthropic vs subscription). The test
+    # cares ONLY that run() doesn't AttributeError on a bare Namespace.
     root = tmp_path / "synthetic"
     root.mkdir()
-    (root / ".env").write_text("# synthetic\n")
+    (root / ".env").write_text("# synthetic test BERIL_ROOT\nACTIVE_PROVIDER=subscription\n")
     skills = root / ".claude" / "skills"
     skills.mkdir(parents=True)
     for name in ("submit", "berdl", "suggest-research"):
