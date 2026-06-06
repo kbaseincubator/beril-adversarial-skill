@@ -27,7 +27,6 @@ import argparse
 
 from beril_adversarial import __version__
 
-
 # The shared block is sentinel-delimited so `configure` can detect-and-skip
 # when another CRAFT skill already wrote it. Keep the sentinels byte-stable.
 SHARED_BLOCK = """\
@@ -42,13 +41,11 @@ SHARED_BLOCK = """\
 #   subscription  ambient Claude Code login (capped by the monthly Agent SDK credit)
 ACTIVE_PROVIDER=cborg
 
-# Provider credentials — set the ONE matching ACTIVE_PROVIDER.
-CBORG_API_KEY=                              # <-- paste your CBORG key (cborg)
-# ANTHROPIC_API_KEY=                        # <-- your Anthropic Platform key (anthropic)
-
-# CBORG base URL for app-internal (OpenAI-style) calls — keep the /v1.
-# NOTE: `claude -p` uses the BARE host (no /v1); configure handles that split.
-CBORG_BASE_URL=https://api.cborg.lbl.gov/v1
+# CRAFT READS the provider credentials already present in this .env — it does
+# NOT re-declare them (re-declaring would shadow the values BERIL and other
+# processes already set). cborg uses CBORG_API_KEY (+ CBORG_BASE_URL); anthropic
+# uses ANTHROPIC_API_KEY. If a needed key is missing, `configure` fails loud and
+# names which one to add. `claude -p` uses the BARE host (configure strips /v1).
 
 # Model tiers (Claude-tiered in v1). Leave BLANK → `configure` discovers the
 # newest model available on your provider per tier and pins it here (visible +
@@ -59,11 +56,8 @@ MODEL_REASONING=
 MODEL_STANDARD=
 MODEL_FAST=
 
-# Optional: BERIL/KBase data auth (only if a review path reads KBase data).
-# KBASE_AUTH_TOKEN=
-
-# Optional: image generation (presentation-maker only) — independent provider.
-# GOOGLE_AI_STUDIO_API_KEY=
+# (Image generation in presentation-maker reads GOOGLE_AI_STUDIO_API_KEY if
+# present; optional, independent of the reasoning provider. Not declared here.)
 # <<< CRAFT shared config <<<
 """
 

@@ -51,6 +51,67 @@ def test_parse_env_text_ignores_malformed_lines():
 
 
 # ---------------------------------------------------------------------------
+# Inline-comment stripping (D)
+#
+# A naive parser stored a placeholder line like
+#   CBORG_API_KEY=   # <-- paste your key
+# as a non-empty value, masking the missing-credential failure and causing
+# the 401 against CBORG that motivated this fixup. The parser now drops a
+# trailing `#` comment when (a) the value is UNQUOTED and (b) the `#` is
+# preceded by whitespace (or starts the value). Quoted values keep their
+# content verbatim.
+# ---------------------------------------------------------------------------
+
+
+def test_parse_env_text_strips_trailing_comment_from_placeholder():
+    """The exact line that caused the 401: a 'paste your key here' placeholder
+    parses to empty, NOT the comment string."""
+    text = "CBORG_API_KEY=   # <-- paste your CBORG key (cborg)\n"
+    out = configure.parse_env_text(text)
+    assert out == {"CBORG_API_KEY": ""}
+
+
+def test_parse_env_text_strips_trailing_comment_from_real_value():
+    text = "FOO=bar  # this is a comment\n"
+    out = configure.parse_env_text(text)
+    assert out == {"FOO": "bar"}
+
+
+def test_parse_env_text_keeps_hash_inside_unquoted_url():
+    """No whitespace before the `#` → the # is part of the value (URL frag)."""
+    text = "URL=https://example.com/page#fragment\n"
+    out = configure.parse_env_text(text)
+    assert out == {"URL": "https://example.com/page#fragment"}
+
+
+def test_parse_env_text_keeps_hash_inside_quoted_value():
+    """Quoted values are taken verbatim — `#` inside quotes is NOT a comment."""
+    text = 'FOO="quoted # not a comment"\n'
+    out = configure.parse_env_text(text)
+    assert out == {"FOO": "quoted # not a comment"}
+
+
+def test_parse_env_text_quoted_value_ignores_trailing_comment():
+    """A `#` AFTER the closing quote is a trailing comment and is dropped."""
+    text = 'FOO="value"  # comment outside\n'
+    out = configure.parse_env_text(text)
+    assert out == {"FOO": "value"}
+
+
+def test_parse_env_text_strips_value_followed_only_by_spaces():
+    """Value followed only by whitespace gets rstripped (regression guard)."""
+    text = "FOO=bar   \n"
+    out = configure.parse_env_text(text)
+    assert out == {"FOO": "bar"}
+
+
+def test_parse_env_text_empty_value_with_only_a_comment():
+    text = "FOO=# just a comment\n"
+    out = configure.parse_env_text(text)
+    assert out == {"FOO": ""}
+
+
+# ---------------------------------------------------------------------------
 # Sentinel detection + idempotent append
 # ---------------------------------------------------------------------------
 
@@ -84,6 +145,65 @@ def test_compose_env_append_then_again_is_noop():
     text = text + first
     second = configure.compose_env_append(text)
     assert second == ""
+
+
+# ---------------------------------------------------------------------------
+# Additive-only .env (E.ii): compose_env_append must NEVER re-declare a key
+# already present in the user's .env. Re-declaring would shadow values that
+# BERIL and other processes already set. CRAFT-CONTRACT §3.4.
+# ---------------------------------------------------------------------------
+
+
+def test_compose_env_append_omits_keys_already_in_env():
+    """The exact scenario: a BERIL .env already has CBORG_API_KEY (set up by
+    /berdl_start or the operator). configure must NOT emit a CBORG_API_KEY=
+    line — that would shadow the existing value with empty."""
+    user_env = "CBORG_API_KEY=actually-set-by-beril\n"
+    out = configure.compose_env_append(user_env)
+    # Whatever the appended block looks like, it must not redeclare CBORG_API_KEY.
+    parsed = configure.parse_env_text(out)
+    assert "CBORG_API_KEY" not in parsed, (
+        "compose_env_append redeclared CBORG_API_KEY despite it being "
+        "present in the user's .env — that shadows the existing value."
+    )
+
+
+def test_compose_env_append_omits_keys_for_per_skill_block_too():
+    """Same property applies when the shared block is already present and we
+    only append the per-skill marker."""
+    base = template_env.render(include_shared=True)
+    # Mutate to look like the user added their own per-skill placeholder
+    # for a future skill. Append the per-skill block and assert no
+    # re-declaration of CBORG_API_KEY.
+    user_env = base + "\nCBORG_API_KEY=set-elsewhere\n"
+    out = configure.compose_env_append(user_env)
+    parsed = configure.parse_env_text(out)
+    assert "CBORG_API_KEY" not in parsed
+
+
+def test_compose_env_append_still_emits_keys_not_yet_present():
+    """The filter only drops keys ALREADY set; keys the user hasn't declared
+    must still land. Otherwise the additive contract is broken in the other
+    direction."""
+    user_env = "SOME_OTHER_VAR=foo\n"
+    out = configure.compose_env_append(user_env)
+    # ACTIVE_PROVIDER is in the shared block + not in user_env → must appear.
+    parsed = configure.parse_env_text(out)
+    assert "ACTIVE_PROVIDER" in parsed
+
+
+def test_strip_lines_for_keys_already_present_preserves_comments_and_blanks():
+    """The filter must keep comments + blank lines + sentinel markers
+    verbatim — only `KEY=...` lines whose KEY is in the set get dropped."""
+    block = "# >>> sentinel\n# a comment\n\nFOO=keep_me\nBAR=drop_me\n# <<< sentinel\n"
+    out = configure._strip_lines_for_keys_already_present(block, {"BAR"})
+    assert out == ("# >>> sentinel\n# a comment\n\nFOO=keep_me\n# <<< sentinel\n")
+
+
+def test_strip_lines_drops_nothing_when_no_overlap():
+    block = "FOO=1\nBAR=2\n"
+    assert configure._strip_lines_for_keys_already_present(block, set()) == block
+    assert configure._strip_lines_for_keys_already_present(block, {"UNRELATED"}) == block
 
 
 def test_has_shared_block_detects_open_or_close():
