@@ -30,7 +30,7 @@ captured in `RELEASE_NOTES.md` per release).
 **Status:** Original — v0.1 ready for repo init. Current shipped
 state: v0.6.2 (see `RELEASE_NOTES.md`).
 
-This document specifies the shape of `ArkinLaboratory/beril-adversarial-skill`.
+This document specifies the shape of `kbaseincubator/beril-adversarial-skill`.
 The skill is modelled on BERIL's `/berdl-review` for the core review-runs-claude
 pattern, with packaging modelled on the atlas skill's
 pip-installable-with-shipped-skill-data approach.
@@ -56,7 +56,7 @@ Value beyond `/berdl-review`:
 ## Repository tree
 
 ```
-ArkinLaboratory/beril-adversarial-skill/
+kbaseincubator/beril-adversarial-skill/
 ├── pyproject.toml         hatchling build, zero runtime deps
 ├── README.md, LICENSE, .gitignore, .gitattributes
 ├── src/beril_adversarial/
@@ -286,7 +286,7 @@ is ready for them when needed.
 
 ## Deliverables this document blocks
 
-- Repo init: `gh repo create ArkinLaboratory/beril-adversarial-skill --private --clone`
+- Repo init: `gh repo create kbaseincubator/beril-adversarial-skill --private --clone`
   + initial commit + tag `v0.1.0` + push.
 - After signoff from live tests, this LAYOUT becomes the seed
   README/architecture page in the repo's documentation.
