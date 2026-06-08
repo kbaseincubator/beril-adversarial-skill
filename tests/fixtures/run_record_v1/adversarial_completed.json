@@ -1,0 +1,43 @@
+{
+  "schema_version": "run-record.v1",
+  "skill": "adversarial",
+  "skill_version": "0.8.0",
+  "run_id": "run-1",
+  "draft_dir": "/projects/ibd_phage_targeting/talks/draft_3",
+  "mode": null,
+  "status": "completed",
+  "started_at": "2026-06-08T20:00:00Z",
+  "finished_at": "2026-06-08T20:08:30Z",
+  "exit_code": 2,
+  "current_stage": null,
+  "stages": [
+    {
+      "id": "review",
+      "status": "completed",
+      "model": "opus",
+      "started_at": "2026-06-08T20:02:35Z",
+      "finished_at": "2026-06-08T20:08:30Z",
+      "elapsed_seconds": 355.0,
+      "input_tokens": 6506,
+      "output_tokens": 29189,
+      "cache_read_tokens": 2097750,
+      "cache_creation_tokens": 0,
+      "cost_usd": 9.354,
+      "subrecord": null
+    }
+  ],
+  "totals": {
+    "cost_usd": 9.354,
+    "input_tokens": 6506,
+    "output_tokens": 29189,
+    "cache_read_tokens": 2097750,
+    "cache_creation_tokens": 0,
+    "elapsed_seconds": 355.0
+  },
+  "models_used": ["opus"],
+  "artifacts": {
+    "user_intent": null,
+    "deliverable_validation": null,
+    "deliverable": "audit/adversarial_review.md"
+  }
+}

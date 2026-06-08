@@ -16,13 +16,24 @@ detailed progress lines (Claude Code batches bash output so they
 weren't visible in real time anyway).
 
 Stdin: stream-json events from claude.
-Stdout: passthrough of the events (consumed by `> /dev/null` in the shell).
+Stdout: by default, passthrough of the raw events (consumed by
+  `> /dev/null` in the legacy pipeline). With --reemit-text, the
+  assistant's streamed TEXT is re-emitted instead (human-readable
+  live progress — used by the presentation/paper review path, which
+  shows the reasoning as it flows rather than going silent-until-done).
 Stderr: end-of-run summary.
 
+Multi-file reviews (Cycle 3): --expected-write-path may be given
+MULTIPLE times. With one path the historical semantics hold (that one
+path must be written). With several, EACH must be written (the
+presentation/paper reviewer writes both .md and .json). With none,
+Write verification is skipped entirely (exit 0 regardless) — the call
+is then used purely for the cost/usage capture + text re-emit.
+
 Exit codes:
-  0 — Write was invoked on the expected target
-  2 — Write was NEVER invoked (silent-failure mode caught — retryable)
-  3 — Write was invoked on a different path than expected
+  0 — every expected Write target was invoked (or none required)
+  2 — an expected Write was NEVER invoked (silent-failure — retryable)
+  3 — an expected target was not among the written paths
 """
 
 from __future__ import annotations
@@ -65,6 +76,35 @@ def _estimate_cost(usage: dict, model: str | None) -> float | None:
     ) / 1_000_000
 
 
+def _path_was_written(expected_write_path: str, write_paths: list[str]) -> bool:
+    """True iff `expected_write_path` matches one of the written paths.
+    Match order: resolved-absolute equality, then absolute equality,
+    then basename equality (the historical fallback for relative vs
+    absolute path shapes)."""
+    try:
+        expected_abs = Path(expected_write_path).resolve()
+    except (OSError, RuntimeError):
+        expected_abs = None
+    for p in write_paths:
+        if expected_abs is not None:
+            try:
+                if Path(p).resolve() == expected_abs:
+                    return True
+            except (OSError, RuntimeError):
+                pass
+        try:
+            p_path = Path(p)
+            e_path = Path(expected_write_path)
+            if p_path.is_absolute() and e_path.is_absolute():
+                if p_path == e_path:
+                    return True
+            elif p_path.name == e_path.name:
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def _write_metadata_json(metadata_path: Path, metadata: dict) -> bool:
     """Write a per-call metadata JSON sidecar.
 
@@ -85,12 +125,32 @@ def _write_metadata_json(metadata_path: Path, metadata: dict) -> bool:
         return False
 
 
+def _emit_assistant_text(event: dict) -> None:
+    """Re-emit the assistant's text content from a stream event to
+    stdout, so the user watches the review reason in real time (the
+    bare `claude -p` behavior we must not regress). Handles the
+    streaming delta shape (content_block_delta / text_delta) and the
+    batched assistant-message shape."""
+    etype = event.get("type")
+    if etype == "content_block_delta":
+        delta = event.get("delta") or {}
+        if delta.get("type") in (None, "text_delta") and delta.get("text"):
+            sys.stdout.write(delta["text"])
+            sys.stdout.flush()
+    elif etype == "assistant":
+        for cb in (event.get("message", {}) or {}).get("content", []) or []:
+            if isinstance(cb, dict) and cb.get("type") == "text" and cb.get("text"):
+                sys.stdout.write(cb["text"])
+                sys.stdout.flush()
+
+
 def parse_stream(
-    expected_write_path: str | None,
+    expected_write_paths: list[str] | None,
     log_path: str | None,
     quiet: bool,
     model: str | None = None,
     metadata_out: str | None = None,
+    reemit_text: bool = False,
 ) -> int:
     write_invoked = False
     write_paths: list[str] = []
@@ -103,8 +163,11 @@ def parse_stream(
     for raw in sys.stdin:
         if log_fh:
             log_fh.write(raw)
-        sys.stdout.write(raw)
-        sys.stdout.flush()
+        if not reemit_text:
+            # Legacy passthrough: raw events to stdout (the legacy
+            # pipeline consumes them via `> /dev/null`).
+            sys.stdout.write(raw)
+            sys.stdout.flush()
 
         line = raw.strip()
         if not line:
@@ -114,6 +177,11 @@ def parse_stream(
         except json.JSONDecodeError:
             parse_errors += 1
             continue
+
+        if reemit_text:
+            # Human-readable live progress (preserves DP6) instead of
+            # the raw JSON firehose.
+            _emit_assistant_text(event)
 
         # Detect Write across the three observed event shapes.
         tool_use = None
@@ -170,64 +238,40 @@ def parse_stream(
         print("─" * 50, file=sys.stderr)
         print("", file=sys.stderr)
 
-    # Programmatic Write verification
-    if expected_write_path is not None:
+    # Programmatic Write verification. With no expected paths, skip it
+    # entirely (the call is used for cost/usage capture + text re-emit).
+    # With one or more, EACH expected path must have been written.
+    if expected_write_paths:
         if not write_invoked:
             print("", file=sys.stderr)
             print(
-                f"❌ Write tool was NEVER invoked. Expected target: "
-                f"{expected_write_path}",
+                f"❌ Write tool was NEVER invoked. Expected target(s): "
+                f"{', '.join(expected_write_paths)}",
                 file=sys.stderr,
             )
             return 2
 
-        try:
-            expected_abs = Path(expected_write_path).resolve()
-        except (OSError, RuntimeError):
-            expected_abs = None
-
-        match_found = False
-        for p in write_paths:
-            if expected_abs is not None:
-                try:
-                    if Path(p).resolve() == expected_abs:
-                        match_found = True
-                        break
-                except (OSError, RuntimeError):
-                    pass
-            try:
-                p_path = Path(p)
-                e_path = Path(expected_write_path)
-                if p_path.is_absolute() and e_path.is_absolute():
-                    if p_path == e_path:
-                        match_found = True
-                        break
-                elif p_path.name == e_path.name:
-                    match_found = True
-                    break
-            except (OSError, ValueError):
-                continue
-
-        if not match_found:
-            print("", file=sys.stderr)
-            print(
-                f"⚠ Write was invoked but on a different path than expected:",
-                file=sys.stderr,
-            )
-            print(f"  Expected: {expected_write_path}", file=sys.stderr)
-            print(f"  Actual:   {', '.join(write_paths)}", file=sys.stderr)
-            # Surface recovery command
-            for p in write_paths:
-                try:
-                    p_resolved = Path(p).resolve()
-                    if p_resolved.is_file():
-                        print(
-                            f"  Recover: mv '{p_resolved}' '{expected_write_path}'",
-                            file=sys.stderr,
-                        )
-                except (OSError, RuntimeError):
-                    pass
-            return 3
+        for expected_write_path in expected_write_paths:
+            if not _path_was_written(expected_write_path, write_paths):
+                print("", file=sys.stderr)
+                print(
+                    "⚠ Write was invoked but an expected path is missing:",
+                    file=sys.stderr,
+                )
+                print(f"  Expected: {expected_write_path}", file=sys.stderr)
+                print(f"  Actual:   {', '.join(write_paths)}", file=sys.stderr)
+                for p in write_paths:
+                    try:
+                        p_resolved = Path(p).resolve()
+                        if p_resolved.is_file():
+                            print(
+                                f"  Recover: mv '{p_resolved}' "
+                                f"'{expected_write_path}'",
+                                file=sys.stderr,
+                            )
+                    except (OSError, RuntimeError):
+                        pass
+                return 3
 
     # Success — write per-call metadata JSON for the shell-level
     # aggregator to combine across the pipeline (main + critic + fix
@@ -262,8 +306,12 @@ def main() -> int:
     p = argparse.ArgumentParser(
         description="Parse claude stream-json for Write verification + cost summary."
     )
-    p.add_argument("--expected-write-path", default=None,
-                   help="Verify Write was invoked on this target. Exit nonzero if not.")
+    p.add_argument("--expected-write-path", action="append", default=None,
+                   dest="expected_write_paths",
+                   help="Verify Write was invoked on this target. Repeatable "
+                        "— each given path must be written (the presentation/"
+                        "paper reviewer writes both .md and .json). Omit to "
+                        "skip Write verification (cost-capture only).")
     p.add_argument("--log", default=None,
                    help="Write the raw stream-json to this file for debugging.")
     p.add_argument("--quiet", action="store_true",
@@ -275,14 +323,20 @@ def main() -> int:
                         "The shell pipeline aggregates these across calls and "
                         "writes one cumulative Run Metadata section to the "
                         "final review file.")
+    p.add_argument("--reemit-text", action="store_true",
+                   help="Re-emit the assistant's streamed TEXT to stdout "
+                        "(human-readable live progress) instead of the raw "
+                        "JSON events. Used by the presentation/paper review "
+                        "path so progress stays visible.")
     args = p.parse_args()
 
     return parse_stream(
-        expected_write_path=args.expected_write_path,
+        expected_write_paths=args.expected_write_paths,
         log_path=args.log,
         quiet=args.quiet,
         model=args.model,
         metadata_out=args.metadata_out,
+        reemit_text=args.reemit_text,
     )
 
 

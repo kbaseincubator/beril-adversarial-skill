@@ -306,6 +306,65 @@ fi
 # Ensure state/ exists (for learned-patterns.md).
 mkdir -p "$STATE_DIR"
 
+# Cycle 3 / DP1: run-record.v1 emitter hooks. adversarial writes its
+# run record into the TARGET draft's audit/ under its OWN slots
+# (adversarial_run_record.json + adversarial_runs/run-N/) — NEVER the
+# producer's audit/run_record.json. Scoped to the presentation + paper
+# review paths (plan/project legacy is out of Cycle-3 scope). The
+# emitter CLI is a sibling vendored tool. All hooks are non-fatal — a
+# telemetry write must never change the review's exit code.
+RUN_RECORD_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+_rr_emitter() { echo "$SKILL_DIR/tools/run_record_emitter.py"; }
+# Resolve the skill version ONCE for the run-record. The emitter is run
+# by whatever python3 is first on PATH, which may not be able to import
+# the (pipx-isolated) beril_adversarial package — so it would otherwise
+# record skill_version="unknown". The `beril-adversarial` CLI is on PATH
+# and reports "beril-adversarial-skill <ver>"; pass that through
+# explicitly so the record carries the real version regardless of which
+# python runs the emitter. Empty if the CLI isn't resolvable (emitter
+# then self-resolves or falls back).
+_rr_skill_version() {
+  command -v beril-adversarial &>/dev/null || return 0
+  beril-adversarial --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1
+}
+RUN_RECORD_SKILL_VERSION="$(_rr_skill_version)"
+_rr_skill_version_arg() {
+  [[ -n "$RUN_RECORD_SKILL_VERSION" ]] && printf -- '--skill-version\n%s\n' "$RUN_RECORD_SKILL_VERSION"
+}
+_rr_record_start() {
+  # $1 = target draft_dir
+  local emitter; emitter="$(_rr_emitter)"
+  [[ -f "$emitter" ]] || return 0
+  command -v python3 &>/dev/null || return 0
+  local ver_arg=(); while IFS= read -r a; do ver_arg+=("$a"); done < <(_rr_skill_version_arg)
+  python3 "$emitter" record-start \
+    --draft-dir "$1" \
+    --started-at "$RUN_RECORD_STARTED_AT" \
+    "${ver_arg[@]}" \
+    >/dev/null 2>&1 || true
+}
+_rr_record_finalize() {
+  # $1 = target draft_dir, $2 = exit code the review is about to return,
+  # $3 = OPTIONAL path to the review's stream_progress metadata sidecar
+  #      (cost/tokens/model/elapsed). Passed on the success paths; omit
+  #      on the early-error exits (no review ran → no sidecar).
+  local emitter; emitter="$(_rr_emitter)"
+  [[ -f "$emitter" ]] || return 0
+  command -v python3 &>/dev/null || return 0
+  local sidecar_arg=()
+  if [[ -n "${3:-}" && -f "$3" ]]; then
+    sidecar_arg=(--from-sidecar "$3")
+  fi
+  local ver_arg=(); while IFS= read -r a; do ver_arg+=("$a"); done < <(_rr_skill_version_arg)
+  python3 "$emitter" record-finalize \
+    --draft-dir "$1" \
+    --exit-code "$2" \
+    --started-at "$RUN_RECORD_STARTED_AT" \
+    "${sidecar_arg[@]}" \
+    "${ver_arg[@]}" \
+    >/dev/null 2>&1 || true
+}
+
 # ==============================================================================
 # JSON-validity backstop (v0.7.0.7)
 #
@@ -701,6 +760,10 @@ run_presentation_review() {
   # adversarial_review.{md,json}.
   local AUDIT_DIR="$DRAFT_DIR/audit"
   mkdir -p "$AUDIT_DIR"
+  # Cycle 3 / DP1: open this review's run record (status=running) into
+  # adversarial's own slots under the target's audit/. Allocates the
+  # next adversarial run-N (each re-review round is preserved).
+  _rr_record_start "$DRAFT_DIR"
   local OUT_BASENAME="adversarial_review"
   if [[ -n "$OUTPUT_FILE" ]]; then
     OUT_BASENAME="$(basename "$OUTPUT_FILE")"
@@ -796,28 +859,60 @@ block before emitting JSON."
 
   if ! command -v claude &>/dev/null; then
     echo "Error: 'claude' CLI is not installed or not in PATH" >&2
+    _rr_record_finalize "$DRAFT_DIR" 3
     exit 3
   fi
 
   local sys_prompt
   sys_prompt="$(cat "$SYSTEM_PROMPT_FILE")"
 
-  # Direct claude invocation — we do NOT pipe through stream_progress.py
-  # because that helper is wired for a single expected_write_path. The
-  # presentation reviewer writes two files; we verify both post-hoc
-  # and let claude's text output flow to stdout for the user to watch.
+  # Cycle 3 / DP1: route through stream_progress.py to CAPTURE the
+  # review's cost/tokens/model/elapsed (stream-json terminal usage
+  # event) for the run-record, while PRESERVING live progress
+  # (--reemit-text streams the assistant's reasoning to stdout as it
+  # flows — not silent-until-done). stream_progress now accepts
+  # multiple --expected-write-path (the reviewer writes BOTH .md +
+  # .json), so it does dual-file Write verification AND writes the
+  # per-call metadata sidecar the emitter folds at record-finalize.
+  # Falls back to the bare call if NO_STREAM / no python3 / no parser
+  # (telemetry is best-effort; the review itself must still run).
+  local RR_META="$AUDIT_DIR/.adversarial_review.metadata.json"
   local rc=0
-  CLAUDECODE= claude -p \
-    --model "$MODEL" \
-    --system-prompt "$sys_prompt" \
-    --allowedTools "$PRESENTATION_TOOLS" \
-    --dangerously-skip-permissions \
-    "$REVIEW_PROMPT" \
-    < /dev/null \
-    || rc=$?
+  local _parser="$SKILL_DIR/tools/stream_progress.py"
+  if [[ "$NO_STREAM" != "1" ]] && command -v python3 &>/dev/null \
+      && [[ -f "$_parser" ]]; then
+    set -o pipefail
+    CLAUDECODE= claude -p \
+      --model "$MODEL" \
+      --system-prompt "$sys_prompt" \
+      --allowedTools "$PRESENTATION_TOOLS" \
+      --dangerously-skip-permissions \
+      --output-format stream-json \
+      --verbose \
+      "$REVIEW_PROMPT" \
+      < /dev/null \
+      | python3 "$_parser" \
+          --expected-write-path "$OUT_JSON" \
+          --expected-write-path "$OUT_MD" \
+          --model "$MODEL" \
+          --metadata-out "$RR_META" \
+          --reemit-text \
+      || rc=$?
+    set +o pipefail
+  else
+    CLAUDECODE= claude -p \
+      --model "$MODEL" \
+      --system-prompt "$sys_prompt" \
+      --allowedTools "$PRESENTATION_TOOLS" \
+      --dangerously-skip-permissions \
+      "$REVIEW_PROMPT" \
+      < /dev/null \
+      || rc=$?
+  fi
 
   if [[ $rc -ne 0 ]]; then
     echo "Error: claude invocation failed (exit $rc)" >&2
+    _rr_record_finalize "$DRAFT_DIR" 2 "$RR_META"
     exit 2
   fi
 
@@ -837,6 +932,7 @@ block before emitting JSON."
     echo "This is a known stochastic failure mode of claude -p with rich tool" >&2
     echo "grants — re-run the command. If it persists, the prompt may need" >&2
     echo "tightening (see prompts/adversarial_presentation.v3.md self-skepticism)." >&2
+    _rr_record_finalize "$DRAFT_DIR" 2 "$RR_META"
     exit 2
   fi
 
@@ -858,12 +954,17 @@ block before emitting JSON."
   echo "Presentation review complete."
   echo "  JSON: ${OUT_JSON}"
   echo "  MD:   ${OUT_MD}"
+  # Cycle 3 / DP1: finalize the run record with the exit code we're
+  # about to return — record_finalize maps it to status via the
+  # consumer-safe set (0/2 → completed; 4 → failed).
   if [[ $json_safety_rc -eq 4 ]]; then
     # The .json could not be made consumer-safe even after auto-repair.
     # Exit 4 so a consumer keying on the exit code does not parse a
     # malformed file. The .md report is intact.
+    _rr_record_finalize "$DRAFT_DIR" 4 "$RR_META"
     exit 4
   fi
+  _rr_record_finalize "$DRAFT_DIR" 0 "$RR_META"
   exit 0
 }
 
@@ -1048,6 +1149,10 @@ run_paper_review_v2() {
   # adversarial_review.{md,json}.
   local AUDIT_DIR="$DRAFT_DIR/audit"
   mkdir -p "$AUDIT_DIR"
+  # Cycle 3 / DP1: open this review's run record (status=running) into
+  # adversarial's own slots under the target's audit/. Allocates the
+  # next adversarial run-N (each re-review round is preserved).
+  _rr_record_start "$DRAFT_DIR"
   local OUT_BASENAME="adversarial_review"
   if [[ -n "$OUTPUT_FILE" ]]; then
     OUT_BASENAME="$(basename "$OUTPUT_FILE")"
@@ -1138,24 +1243,53 @@ miscount, but try)."
 
   if ! command -v claude &>/dev/null; then
     echo "Error: 'claude' CLI is not installed or not in PATH" >&2
+    _rr_record_finalize "$DRAFT_DIR" 3
     exit 3
   fi
 
   local sys_prompt
   sys_prompt="$(cat "$SYSTEM_PROMPT_FILE")"
 
+  # Cycle 3 / DP1: capture cost/tokens via stream-json + preserve live
+  # progress (--reemit-text), same as the presentation path. Falls back
+  # to the bare call when NO_STREAM / no python3 / no parser.
+  local RR_META="$AUDIT_DIR/.adversarial_review.metadata.json"
   local rc=0
-  CLAUDECODE= claude -p \
-    --model "$MODEL" \
-    --system-prompt "$sys_prompt" \
-    --allowedTools "$PAPER_TOOLS" \
-    --dangerously-skip-permissions \
-    "$REVIEW_PROMPT" \
-    < /dev/null \
-    || rc=$?
+  local _parser="$SKILL_DIR/tools/stream_progress.py"
+  if [[ "$NO_STREAM" != "1" ]] && command -v python3 &>/dev/null \
+      && [[ -f "$_parser" ]]; then
+    set -o pipefail
+    CLAUDECODE= claude -p \
+      --model "$MODEL" \
+      --system-prompt "$sys_prompt" \
+      --allowedTools "$PAPER_TOOLS" \
+      --dangerously-skip-permissions \
+      --output-format stream-json \
+      --verbose \
+      "$REVIEW_PROMPT" \
+      < /dev/null \
+      | python3 "$_parser" \
+          --expected-write-path "$OUT_JSON" \
+          --expected-write-path "$OUT_MD" \
+          --model "$MODEL" \
+          --metadata-out "$RR_META" \
+          --reemit-text \
+      || rc=$?
+    set +o pipefail
+  else
+    CLAUDECODE= claude -p \
+      --model "$MODEL" \
+      --system-prompt "$sys_prompt" \
+      --allowedTools "$PAPER_TOOLS" \
+      --dangerously-skip-permissions \
+      "$REVIEW_PROMPT" \
+      < /dev/null \
+      || rc=$?
+  fi
 
   if [[ $rc -ne 0 ]]; then
     echo "Error: claude invocation failed (exit $rc)" >&2
+    _rr_record_finalize "$DRAFT_DIR" 2 "$RR_META"
     exit 2
   fi
 
@@ -1173,6 +1307,7 @@ miscount, but try)."
       echo "  - $f" >&2
     done
     echo "This is a known stochastic failure mode of claude -p; re-run." >&2
+    _rr_record_finalize "$DRAFT_DIR" 2 "$RR_META"
     exit 2
   fi
 
@@ -1194,12 +1329,16 @@ miscount, but try)."
   echo "Paper review complete."
   echo "  JSON: ${OUT_JSON}"
   echo "  MD:   ${OUT_MD}"
+  # Cycle 3 / DP1: finalize the run record with the exit code (status
+  # via the consumer-safe set: 0/2 → completed; 4 → failed).
   if [[ $json_safety_rc -eq 4 ]]; then
     # The .json could not be made consumer-safe even after auto-repair.
     # Exit 4 so a consumer keying on the exit code does not parse a
     # malformed file. The .md report is intact.
+    _rr_record_finalize "$DRAFT_DIR" 4 "$RR_META"
     exit 4
   fi
+  _rr_record_finalize "$DRAFT_DIR" 0 "$RR_META"
   exit 0
 }
 

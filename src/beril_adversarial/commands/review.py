@@ -51,6 +51,20 @@ VALID_TYPES = ("plan", "project", "paper", "presentation")
 VALID_REVIEWERS = ("claude", "codex", "claude,codex")
 VALID_DEPTHS = ("quick", "standard", "deep")
 
+# Authoritative definition of "did this review produce a consumer-safe
+# deliverable." Per the exit-code contract above (v0.7.0.7/0.7.0.8):
+#   0 — clean + consumer-safe
+#   2 — validator auto-corrected + emitted advisory warnings, but the
+#       .json is still consumer-safe (non-fatal)
+# while 1 (user error), 3 (config error), and 4 (json NOT consumer-safe)
+# mean no usable deliverable. The Cycle-3 run-record emitter keys its
+# terminal status off THIS constant (status=completed iff exit_code in
+# the set, else failed) so the run-record's notion of "produced a
+# consumer-safe deliverable" can never drift from the skill's own — the
+# exit_code field still carries the 0-vs-2 nuance (clean vs
+# auto-corrected) for telemetry.
+ADVERSARIAL_CONSUMER_SAFE_EXITS = (0, 2)
+
 
 def add_parser(subparsers: argparse._SubParsersAction) -> argparse.ArgumentParser:
     p = subparsers.add_parser(
