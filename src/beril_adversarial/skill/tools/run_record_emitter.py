@@ -487,7 +487,36 @@ def record_finalize(
         skill_version=existing.get(
             "skill_version", skill_version or _SKILL_VERSION),
     )
-    return _write_canonical_and_archive(draft_dir, record, run_n)
+    canonical, archive = _write_canonical_and_archive(draft_dir, record, run_n)
+
+    # C1-D telemetry egress: project the persisted record through the strict
+    # drop-by-default whitelist and best-effort batch-write ONE JSONL to the
+    # shared egress root. UNCONDITIONAL after the canonical write — adversarial
+    # never halts (record-finalize is unconditional), so there is NO A1/A2
+    # resume/dropped-stage class to be after (unlike the drafting skills).
+    # draft_hash is computed from the REVIEWED draft's draft_dir, so it MATCHES
+    # the producer's draft_hash → `craft inspect telemetry` shows a draft's
+    # full cost INCLUDING its review under one draft_hash (intended).
+    # Disabled (CRAFT_TELEMETRY_ROOT=off) → cheap no-op. NEVER raises / slows
+    # finalize: the egress fn swallows its own faults, and this wrapper
+    # double-guards a vendored-import hiccup.
+    #
+    # DOUBLE-COUNT NOTE (out of scope for D — flagged): the adversarial→parent
+    # cost rollup is still backlog, so the parent pipeline records its
+    # `adversarial_review` stage at cost≈0 while adversarial's own record
+    # carries the real ~$9.35/review. They are different `(skill, op)` rows, so
+    # `craft inspect telemetry` separates them — no double count TODAY. When the
+    # rollup lands (the parent stage gets the real cost), reconcile so inspect
+    # doesn't sum both for the same review.
+    try:
+        from beril_adversarial import telemetry as _craft_telemetry
+        _craft_telemetry.egress_run_record(
+            record, audit_dir=_audit_dir(draft_dir))
+    except Exception as _exc:  # noqa: BLE001 — telemetry NEVER perturbs finalize
+        print(f"run_record_emitter: telemetry egress skipped "
+              f"({type(_exc).__name__}: {_exc}).", file=sys.stderr)
+
+    return canonical, archive
 
 
 # ---------------------------------------------------------------------------
